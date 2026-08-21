@@ -196,6 +196,152 @@ _MAILS: list[_Mail] = [
           "Juniper Grid can move fast; shall I set up an intro?",
           thread="beacon", reply_to_prev=True),
 
+    # --- Larkspur Systems: ghosted after the technical --------------------
+    _Mail(58, "recruiting@larkspur-systems.example",
+          "Thanks for applying to Larkspur Systems",
+          "We received your application for Senior Distributed Systems "
+          "Engineer and will review it shortly.",
+          thread="larkspur-apply"),
+    _Mail(52, "recruiting@larkspur-systems.example",
+          "Phone screen - Larkspur Systems",
+          "We would like to schedule a phone screen with the storage team "
+          "for your Senior Distributed Systems Engineer application.",
+          thread="larkspur-loop"),
+    _Mail(51.5, DEMO_ACCOUNT,
+          "Re: Phone screen - Larkspur Systems",
+          "Great - Monday or Tuesday afternoon both work for me.",
+          to="recruiting@larkspur-systems.example", thread="larkspur-loop",
+          reply_to_prev=True),
+    _Mail(46, "scheduler@larkspur-systems.example",
+          "Technical interview confirmed - Larkspur Systems",
+          "Your technical interview is confirmed for Thursday - a coding "
+          "exercise on a shared editor, then distributed-systems design.",
+          thread="larkspur-tech"),
+    # ...then nothing: 46 days of silence after a technical round.
+
+    # --- Copper Peak: a live loop, currently at onsite --------------------
+    _Mail(41, "no-reply@copperpeak.example",
+          "We received your application - Staff Infrastructure Engineer",
+          "Thanks for applying to Copper Peak! Your application for Staff "
+          "Infrastructure Engineer has been received.",
+          thread="copperpeak-apply"),
+    _Mail(37, "jordan@copperpeak.example",
+          "Copper Peak - intro call this week?",
+          "Hi, I am Jordan, recruiting at Copper Peak. Could we set up an "
+          "intro call about the Staff Infrastructure Engineer role?",
+          thread="copperpeak-loop"),
+    _Mail(36.5, DEMO_ACCOUNT,
+          "Re: Copper Peak - intro call this week?",
+          "Hi Jordan - happy to. Friday morning works best.",
+          to="jordan@copperpeak.example", thread="copperpeak-loop",
+          reply_to_prev=True),
+    _Mail(30, "jordan@copperpeak.example",
+          "Technical screen confirmed - Copper Peak",
+          "Confirming your technical screen: one hour, infrastructure "
+          "coding, with two engineers from the platform group.",
+          thread="copperpeak-loop", reply_to_prev=True),
+    _Mail(17, "jordan@copperpeak.example",
+          "Final round onsite - Copper Peak",
+          "The team was impressed - we would like to invite you to a final "
+          "round onsite interview: systems design, debugging, and a "
+          "leadership conversation.",
+          thread="copperpeak-onsite"),
+    _Mail(16.5, DEMO_ACCOUNT,
+          "Re: Final round onsite - Copper Peak",
+          "Wonderful news - next Wednesday works. Thanks Jordan!",
+          to="jordan@copperpeak.example", thread="copperpeak-onsite",
+          reply_to_prev=True),
+
+    # --- Halcyon Grid: phone screen, then a rejection ---------------------
+    _Mail(55, "talent@halcyon-grid.example",
+          "Your application to Halcyon Grid",
+          "Thank you for applying to Halcyon Grid. Your application for "
+          "Backend Engineer, Grid Services is in review.",
+          thread="halcyon-apply"),
+    _Mail(49, "talent@halcyon-grid.example",
+          "Phone screen invitation - Halcyon Grid",
+          "We would like to schedule a 45-minute phone screen for the "
+          "Backend Engineer, Grid Services position.",
+          thread="halcyon-loop"),
+    _Mail(43, "talent@halcyon-grid.example",
+          "Your Halcyon Grid application - decision",
+          "Thank you for speaking with us. After careful review we have "
+          "decided to pursue other candidates whose experience more "
+          "closely matches the team's needs right now.",
+          thread="halcyon-status"),
+
+    # --- Tidegate Security: onsite, then rejected after ------------------
+    _Mail(64, "careers@tidegate-security.example",
+          "Application received - Security Platform Engineer",
+          "Thanks for applying to Tidegate Security. We received your "
+          "application for Security Platform Engineer.",
+          thread="tidegate-apply"),
+    _Mail(50, "careers@tidegate-security.example",
+          "Onsite interview - Security Platform Engineer",
+          "Strong screen results - we would like to bring you in for an "
+          "onsite interview with the detection and response team.",
+          thread="tidegate-loop"),
+    _Mail(44, "careers@tidegate-security.example",
+          "Your Tidegate Security interview - outcome",
+          "Thank you for the time you spent with the team. Unfortunately "
+          "we have decided to move forward with other candidates for this "
+          "position. We would be glad to stay in touch.",
+          thread="tidegate-status"),
+
+    # --- Sable Mountain Capital: candidate withdraws ----------------------
+    _Mail(61, "talent@sablemountain.example",
+          "We received your application - Quantitative Developer",
+          "Thank you for applying to Sable Mountain Capital. Your "
+          "application for Quantitative Developer has been received.",
+          thread="sable-apply"),
+    _Mail(47, "talent@sablemountain.example",
+          "Withdrawal confirmed - Sable Mountain Capital",
+          "We have received your request to withdraw your application for "
+          "Quantitative Developer. Your candidacy is now closed - best of "
+          "luck with your search.",
+          thread="sable-status"),
+
+    # --- Cold applies into the void ---------------------------------------
+    _Mail(24, "no-reply@bluewren-data.example",
+          "Thanks for applying - Data Platform Engineer",
+          "Thanks for applying to Bluewren Data! Your application for Data "
+          "Platform Engineer has been received and is in review.",
+          thread="bluewren"),
+    _Mail(19, "jobs@fernwood-bio.example",
+          "Application received - Senior Software Engineer, Lab Systems",
+          "Thank you for applying to Fernwood Biotech. We received your "
+          "application for Senior Software Engineer, Lab Systems.",
+          thread="fernwood"),
+
+    # --- Northgate: direct recruiter outreach, never answered -------------
+    _Mail(10, "sam@northgate-semi.example",
+          "Your infrastructure background - Northgate Semiconductors",
+          "I lead engineering hiring at Northgate Semiconductors. Your "
+          "background looks like a strong match for a Principal Engineer "
+          "position on our fab-software team. Open to a conversation?",
+          thread="northgate"),
+
+    # --- Harbor Talent Partners: a second agency, two clients -------------
+    _Mail(9, "priya@harbortalent.example",
+          "Two roles worth a look - platform and infra",
+          "Hi! Priya from Harbor Talent Partners here. I am retained by two "
+          "companies you might like: Copper Peak (Staff Infrastructure "
+          "Engineer) and Halcyon Grid (Backend Engineer, Grid Services). "
+          "Would either be interesting?",
+          thread="harbor"),
+    _Mail(8.5, DEMO_ACCOUNT,
+          "Re: Two roles worth a look - platform and infra",
+          "Hi Priya - I am already in process with Copper Peak, but tell "
+          "me more about the Halcyon Grid role?",
+          to="priya@harbortalent.example", thread="harbor",
+          reply_to_prev=True),
+    _Mail(8, "priya@harbortalent.example",
+          "Re: Two roles worth a look - platform and infra",
+          "Understood on Copper Peak! Halcyon Grid is scaling their "
+          "dispatch platform - Go, Postgres, k8s. Band attached. Want an "
+          "intro to the hiring manager?",
+          thread="harbor", reply_to_prev=True),
+
     # --- Noise: what prefilter and rules exist to keep out ----------------
     _Mail(7, "digest@jobboard.example",
           "14 new jobs matching your profile",
@@ -213,6 +359,24 @@ _MAILS: list[_Mail] = [
     _Mail(2, "digest@jobboard.example",
           "9 new jobs matching your profile",
           "Staff Engineer at 9 companies. See all matching jobs.",
+          bulk=True, labels="INBOX,CATEGORY_PROMOTIONS"),
+    _Mail(12, "events@devconf.example",
+          "Webinar: scaling Postgres past a billion rows",
+          "Join our free webinar on partitioning strategies. Register now.",
+          bulk=True, labels="INBOX,CATEGORY_PROMOTIONS"),
+    _Mail(4, "no-reply@accounts.example",
+          "Your password was reset",
+          "Your password was successfully reset. If this was not you, "
+          "contact support immediately.",
+          labels="INBOX,CATEGORY_UPDATES"),
+    _Mail(3, "orders@shopfast.example",
+          "Your order has shipped",
+          "Order #48219 has shipped and will arrive Thursday.",
+          bulk=True, labels="INBOX,CATEGORY_UPDATES"),
+    _Mail(1.5, "hello@citymeetups.example",
+          "This month: systems engineering meetup",
+          "Talks on eBPF and columnar storage. RSVP inside. Unsubscribe "
+          "any time.",
           bulk=True, labels="INBOX,CATEGORY_PROMOTIONS"),
 ]
 

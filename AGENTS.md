@@ -27,7 +27,7 @@ docker compose exec app jobd demo # seed + classify a synthetic mailbox
 # open http://localhost:8100
 ```
 
-`jobd demo` ingests ~30 synthetic messages (fictional companies on the
+`jobd demo` ingests ~60 synthetic messages (fictional companies on the
 reserved `.example` TLD) through the real ingest path and classifies them
 with the free rule-based extractor. The dashboard then has companies,
 applications, an accepted offer, a declined offer, rejections, a ghosted
@@ -38,7 +38,7 @@ everything.
 Verify it worked:
 
 ```bash
-docker compose exec db psql -U jobd -c "SELECT count(*) FROM message;"   # 30
+docker compose exec db psql -U jobd -c "SELECT count(*) FROM message;"   # 58
 docker compose exec db psql -U jobd -c "SELECT canonical_name FROM company;"
 curl -s localhost:8100/api/runs | head -c 200
 ```
