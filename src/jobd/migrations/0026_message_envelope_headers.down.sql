@@ -1,0 +1,10 @@
+DROP INDEX message_in_reply_to_idx;
+DROP INDEX message_message_id_header_idx;
+ALTER TABLE message
+    DROP COLUMN raw_headers,
+    DROP COLUMN is_bulk,
+    DROP COLUMN references_ids,
+    DROP COLUMN in_reply_to,
+    DROP COLUMN message_id_header,
+    DROP COLUMN cc_addresses,
+    DROP COLUMN reply_to;

@@ -1,0 +1,87 @@
+# --- Secrets and state -------------------------------------------------------
+# Terraform state contains the runtime IAM secret access key in plaintext.
+# Nothing below this heading may ever be committed. See SECURITY.md.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl.bak
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+.aws/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+client_secret*.json
+token*.json
+
+# jobd's own secret store, if it is ever placed inside the workspace rather
+# than on the mounted volume at ~/.jobd.
+.jobd/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Local data --------------------------------------------------------------
+# Raw message archives and LinkedIn exports stay on the machine, never in git.
+data/
+*.mbox
+*.sqlite
+*.db
+
+# Real-mail eval corpus candidates awaiting human review (jobd corpus sample).
+# Scrubbed but not verified — see services/corpus_builder.py. Never commit
+# real content here; `jobd corpus promote` is the only path into the real,
+# committed corpus, and only for lines a human has actually reviewed.
+evals/staging/
+
+# --- Editors and OS ----------------------------------------------------------
+.DS_Store
+.idea/
+*.swp
+
+# --- Local agent tooling -----------------------------------------------------
+# Per-machine assistant configuration and scratch space. These describe how one
+# developer drives their tools, not how the project is built, so they stay out
+# of the repo.
+.agents/
+# Per-machine .claude state stays out, but repo-shipped skills are project
+# material. Only the vendored avoid-ai-writing skill (what domain/style.py
+# distills its prompt rules from) is tracked — other skills under
+# .claude/skills/ are one developer's local tooling and stay ignored.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/avoid-ai-writing/
+.mcp.json
+scratchpad/
+
+# --- Frontend ----------------------------------------------------------------
+# The dashboard is a Vite + React + Tailwind app (frontend/) whose build output
+# lands inside the Python package, because FastAPI serves it — there is no
+# second web server. The build is a derived artifact: `npm run build` in
+# frontend/ recreates it, so it is not tracked.
+node_modules/
+frontend/node_modules/
+src/jobd/web/static/
+*.tsbuildinfo

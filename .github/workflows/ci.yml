@@ -1,0 +1,71 @@
+name: CI
+
+# M2 gate 3: ruff and pytest run on every PR. mypy joins them because the
+# scaffold is where type discipline is free — retrofitting it after M5 is not.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    # Same image as the devcontainer. The schema uses pgvector, generated
+    # tsvector columns and partial unique indexes, so tests either run against
+    # real Postgres or they are not testing the schema that ships. The suite
+    # skips database tests when DATABASE_URL is unreachable — which is exactly
+    # why CI must provide one, or the skip becomes invisible.
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jobd
+          POSTGRES_PASSWORD: jobd
+          POSTGRES_DB: jobd
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U jobd"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://jobd:jobd@localhost:5432/jobd
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e '.[dev]'
+
+      # Each check runs even if an earlier one failed. A run that stops at the
+      # first lint error hides the test failure underneath it, which costs a
+      # second round trip for no reason. Same principle as setup.sh all.
+      - name: ruff
+        if: always()
+        run: ruff check .
+
+      - name: mypy
+        if: always()
+        run: mypy
+
+      # -rs prints the skip reasons. There should be none: conftest turns an
+      # unreachable database into a failure when CI is set, because a skipped
+      # test and a passing one look identical in the summary.
+      - name: pytest
+        if: always()
+        run: pytest -rs
+
+      - name: jobd --help
+        if: always()
+        run: jobd --help

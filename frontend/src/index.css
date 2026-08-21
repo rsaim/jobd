@@ -1,0 +1,392 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "tw-shimmer";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ *
+ * Two token layers, kept apart on purpose.
+ *
+ * CHROME is the design system: background/foreground, card, muted, border,
+ * ring, sidebar. It is a cool slate — hue 265, low chroma — with one
+ * saturated hue in it, the SIGNAL violet at hue 300, which is reserved for
+ * "you can act on this": primary buttons, the focus ring, the active nav
+ * item. Nothing in the record is ever painted with it.
+ *
+ * DATA is jobd's, and it is not interchangeable with chrome. The activity
+ * ramp (azure, hue 220) encodes a count, the stage ramp (indigo, hue 255)
+ * encodes ordinal progress, and the status colours carry reserved meaning.
+ * The three families sit 35–45° apart in hue so a stage dot can never be
+ * mistaken for a focus ring, and a mark never borrows a chrome colour.
+ *
+ * Every ramp step clears a 0.06 lightness gap from its neighbour, in both
+ * themes, because a ramp the eye cannot separate is claiming a precision it
+ * does not have.
+ * ------------------------------------------------------------------ */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.985 0.003 265);
+  --foreground: oklch(0.19 0.02 268);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.02 268);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.19 0.02 268);
+  --primary: oklch(0.53 0.21 300);
+  --primary-foreground: oklch(0.985 0.01 300);
+  --secondary: oklch(0.955 0.006 265);
+  --secondary-foreground: oklch(0.28 0.02 268);
+  --muted: oklch(0.962 0.005 265);
+  --muted-foreground: oklch(0.52 0.02 267);
+  --accent: oklch(0.955 0.014 300);
+  --accent-foreground: oklch(0.35 0.1 300);
+  --destructive: oklch(0.58 0.2 25);
+  --border: oklch(0.91 0.006 265);
+  --input: oklch(0.9 0.008 265);
+  --ring: oklch(0.53 0.21 300);
+  --chart-1: oklch(0.53 0.21 300);
+  --chart-2: oklch(0.61 0.135 235);
+  --chart-3: oklch(0.62 0.16 255);
+  --chart-4: oklch(0.75 0.15 78);
+  --chart-5: oklch(0.62 0.16 150);
+  --sidebar: oklch(0.972 0.005 265);
+  --sidebar-foreground: oklch(0.19 0.02 268);
+  --sidebar-primary: oklch(0.53 0.21 300);
+  --sidebar-primary-foreground: oklch(0.985 0.01 300);
+  --sidebar-accent: oklch(0.945 0.016 300);
+  --sidebar-accent-foreground: oklch(0.32 0.11 300);
+  --sidebar-border: oklch(0.9 0.006 265);
+
+  /* Depth. A dashboard read twenty times a day should not be a flat wall of
+     outlines, but it should not be a pile of drop shadows either — surfaces
+     are separated by a hairline, a one-pixel top highlight that reads as a
+     lit edge, and a shadow just heavy enough to say "this floats". */
+  --edge: oklch(1 0 0 / 70%);
+  --shadow-panel: 0 1px 2px oklch(0.19 0.02 268 / 6%), 0 4px 12px -6px oklch(0.19 0.02 268 / 8%);
+  --shadow-lift: 0 2px 4px oklch(0.19 0.02 268 / 7%), 0 12px 28px -10px oklch(0.19 0.02 268 / 14%);
+  --grid-line: oklch(0.19 0.02 268 / 3.5%);
+
+  /* Activity graph — sequential, one hue (azure), light to dark. Level 0 is
+     a surface tone rather than a ramp step, so "nothing happened" reads as
+     absence and not as a faint amount of something. Every cell carries its
+     count in a title and aria-label because colour is never the only
+     channel. */
+  --act-0: oklch(0.935 0.006 265);
+  --act-1: oklch(0.86 0.055 222);
+  --act-2: oklch(0.74 0.105 226);
+  --act-3: oklch(0.61 0.135 232);
+  --act-4: oklch(0.46 0.115 238);
+
+  /* Stage rail — ordinal, in FOUR bands rather than seven steps. Seven
+     stages over one hue put adjacent steps under the lightness floor, so
+     `applied` and `recruiter_screen` were indistinguishable. Banding by
+     phase is what the eye can actually read, and the exact stage is written
+     beside every node anyway.
+
+     `declined` leaves the ramp entirely — a taupe, not a darker indigo —
+     because you saying no to an offer is not a further step along it. */
+  --stage-applied: oklch(0.78 0.08 255);
+  --stage-screening: oklch(0.62 0.16 255);
+  --stage-deep: oklch(0.48 0.17 257);
+  --stage-outcome: oklch(0.34 0.13 259);
+  --stage-declined: oklch(0.6 0.035 75);
+
+  /* Reserved meanings. Always shipped with a word beside them. */
+  --status-good: oklch(0.62 0.16 150);
+  --status-warning: oklch(0.75 0.15 78);
+  --status-critical: oklch(0.58 0.2 25);
+}
+
+.dark {
+  --background: oklch(0.165 0.012 268);
+  --foreground: oklch(0.96 0.004 265);
+  --card: oklch(0.205 0.014 268);
+  --card-foreground: oklch(0.96 0.004 265);
+  --popover: oklch(0.215 0.015 268);
+  --popover-foreground: oklch(0.96 0.004 265);
+  --primary: oklch(0.7 0.17 300);
+  --primary-foreground: oklch(0.17 0.04 300);
+  --secondary: oklch(0.27 0.015 268);
+  --secondary-foreground: oklch(0.96 0.004 265);
+  --muted: oklch(0.26 0.014 268);
+  --muted-foreground: oklch(0.71 0.016 267);
+  --accent: oklch(0.3 0.045 300);
+  --accent-foreground: oklch(0.92 0.04 300);
+  --destructive: oklch(0.68 0.19 25);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.62 0.18 300);
+  --chart-1: oklch(0.7 0.17 300);
+  --chart-2: oklch(0.68 0.125 228);
+  --chart-3: oklch(0.7 0.14 258);
+  --chart-4: oklch(0.8 0.14 78);
+  --chart-5: oklch(0.72 0.15 152);
+  --sidebar: oklch(0.185 0.013 268);
+  --sidebar-foreground: oklch(0.96 0.004 265);
+  --sidebar-primary: oklch(0.7 0.17 300);
+  --sidebar-primary-foreground: oklch(0.17 0.04 300);
+  --sidebar-accent: oklch(0.29 0.04 300);
+  --sidebar-accent-foreground: oklch(0.93 0.035 300);
+  --sidebar-border: oklch(1 0 0 / 8%);
+
+  /* On a dark ground the lit edge runs the other way — a white hairline at
+     10% rather than an opaque highlight — and the shadow does less work
+     because separation comes from the surface stepping lighter, not darker. */
+  --edge: oklch(1 0 0 / 8%);
+  --shadow-panel: 0 1px 2px oklch(0 0 0 / 30%), 0 4px 14px -8px oklch(0 0 0 / 45%);
+  --shadow-lift: 0 2px 6px oklch(0 0 0 / 35%), 0 14px 32px -12px oklch(0 0 0 / 55%);
+  --grid-line: oklch(1 0 0 / 3.5%);
+
+  /* Both ramps are re-stepped against the dark ground rather than inverted:
+     the activity ramp flips its anchor (dark = least) and the stage ramp
+     runs light-ward so its deepest band still clears the contrast floor on
+     a dark surface. */
+  --act-0: oklch(0.255 0.012 268);
+  --act-1: oklch(0.4 0.09 238);
+  --act-2: oklch(0.53 0.125 232);
+  --act-3: oklch(0.68 0.125 226);
+  --act-4: oklch(0.83 0.085 222);
+
+  --stage-applied: oklch(0.45 0.13 257);
+  --stage-screening: oklch(0.58 0.16 255);
+  --stage-deep: oklch(0.7 0.14 255);
+  --stage-outcome: oklch(0.85 0.08 253);
+  --stage-declined: oklch(0.74 0.035 75);
+
+  --status-good: oklch(0.72 0.15 152);
+  --status-warning: oklch(0.8 0.14 78);
+  --status-critical: oklch(0.68 0.19 25);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-act-0: var(--act-0);
+  --color-act-1: var(--act-1);
+  --color-act-2: var(--act-2);
+  --color-act-3: var(--act-3);
+  --color-act-4: var(--act-4);
+  --color-stage-applied: var(--stage-applied);
+  --color-stage-screening: var(--stage-screening);
+  --color-stage-deep: var(--stage-deep);
+  --color-stage-outcome: var(--stage-outcome);
+  --color-stage-declined: var(--stage-declined);
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
+  --color-status-critical: var(--status-critical);
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  --font-display: "Bricolage Grotesque", "Geist", ui-sans-serif, sans-serif;
+
+  --shadow-panel: var(--shadow-panel);
+  --shadow-lift: var(--shadow-lift);
+
+  @keyframes collapsible-down {
+  from {
+    height: 0;
+    }
+  to {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  }
+  @keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    }
+  to {
+    height: 0;
+    }
+  }
+  /* The page-enter sequence. One gesture, staggered by section, rather than
+     an effect on every element — see `.enter` below. */
+  @keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    }
+  to {
+    opacity: 1;
+    transform: none;
+    }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+    font-variation-settings: "opsz" 32;
+  }
+  /* Every number in this app is a quantity to compare down a column, so
+     tabular figures are the default rather than a per-table opt-in. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    @apply font-mono;
+  }
+}
+
+@layer components {
+  /* Graph paper. The whole direction in one rule: the record is measured,
+     so it sits on a ruled ground rather than on blank white. Kept at 3.5%
+     of the ink so it is felt and not read, and faded out down the page so
+     it never competes with a table. */
+  .paper {
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+  }
+
+  /* A surface that reads as a physical panel: hairline border, lit top
+     edge, and a shadow that lifts on hover only where the panel is a link. */
+  .panel {
+    box-shadow:
+      inset 0 1px 0 0 var(--edge),
+      var(--shadow-panel);
+  }
+  .panel-lift {
+    transition:
+      box-shadow 160ms ease,
+      border-color 160ms ease,
+      transform 160ms ease;
+  }
+  .panel-lift:hover {
+    box-shadow:
+      inset 0 1px 0 0 var(--edge),
+      var(--shadow-lift);
+  }
+
+  /* Display type: Bricolage's optical-size and width axes, set narrow and
+     tight for headings. Used on page titles and nowhere else — the point of
+     a characterful face is that it stays rare. */
+  .display {
+    font-family: var(--font-display);
+    font-variation-settings:
+      "wdth" 92,
+      "opsz" 40;
+    letter-spacing: -0.02em;
+  }
+
+  /* Model-written markdown. Hand-rolled rather than @tailwindcss/typography:
+     the plugin was never installed, so the `prose` classes on the company
+     summary were inert and every heading in it rendered as body text. This
+     is the small subset the summary prompt can actually emit. */
+  .md {
+    line-height: 1.6;
+  }
+  .md > * + * {
+    margin-top: 0.7rem;
+  }
+  .md h1,
+  .md h2,
+  .md h3 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-top: 1.15rem;
+  }
+  .md h1 {
+    font-size: 1.05rem;
+  }
+  .md h2 {
+    font-size: 0.95rem;
+  }
+  .md h3 {
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+  }
+  .md ul {
+    list-style: disc;
+    padding-left: 1.15rem;
+  }
+  .md ol {
+    list-style: decimal;
+    padding-left: 1.35rem;
+  }
+  .md li + li {
+    margin-top: 0.2rem;
+  }
+  .md a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .md strong {
+    font-weight: 600;
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--muted);
+    border-radius: 4px;
+    padding: 0.1rem 0.3rem;
+  }
+  .md blockquote {
+    border-left: 2px solid var(--border);
+    padding-left: 0.75rem;
+    color: var(--muted-foreground);
+  }
+  .md hr {
+    border-color: var(--border);
+  }
+  .md table {
+    width: 100%;
+    font-size: 0.9em;
+  }
+  .md th,
+  .md td {
+    border-bottom: 1px solid var(--border);
+    padding: 0.3rem 0.5rem;
+    text-align: left;
+  }
+
+  .enter {
+    animation: rise 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .enter {
+      animation: none;
+    }
+  }
+}
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

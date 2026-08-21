@@ -1,0 +1,1 @@
+ALTER TABLE sender_rule DROP COLUMN IF EXISTS source;

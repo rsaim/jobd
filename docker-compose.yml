@@ -1,0 +1,45 @@
+# One command to a working dashboard:
+#
+#   docker compose up -d
+#   docker compose exec app jobd migrate up
+#   docker compose exec app jobd demo          # synthetic mailbox, no creds
+#   open http://localhost:8100
+#
+# The demo needs no API keys, no Gmail and no S3. For a real mailbox, see
+# AGENTS.md — the same containers take Gmail OAuth credentials and (only if
+# you want model-based extraction) an OpenRouter key via the environment.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: jobd
+      POSTGRES_PASSWORD: jobd
+      POSTGRES_DB: jobd
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobd"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://jobd:jobd@db:5432/jobd
+      JOBD_LOCAL_STORE: /data/raw
+      # Optional, for LLM extraction and the chat dock — the demo and the
+      # rule-based pipeline never read it:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - rawstore:/data
+    ports:
+      - "8100:8100"
+
+volumes:
+  pgdata:
+  rawstore:
