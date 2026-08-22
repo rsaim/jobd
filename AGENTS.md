@@ -102,6 +102,38 @@ Design invariants an agent should preserve when extending this code:
 - Everything is idempotent: re-running scrape/ingest/classify over the same
   window is safe by construction (content-addressed storage, upserts).
 
+## Evals
+
+The classifier is measured, not vibes-checked. `evals/` holds an
+[Inspect](https://inspect.aisi.org.uk/) task that scores the message
+classifier against gold labels for the synthetic mailbox (ground truth is
+known by construction — `evals/gold_demo.py`):
+
+```bash
+pip install -e ".[eval]"
+python evals/run.py                                        # free tier, offline
+python evals/run.py --model openrouter/google/gemini-3.7-flash   # paid tier
+inspect view --log-dir evals/logs                          # per-sample browser
+```
+
+Current scorecard (58 messages; job-relatedness is binary, stage and
+company are scored over gold job-related messages):
+
+| metric | free tier (prefilter + rules) | gemini-3.7-flash |
+|---|---|---|
+| precision | 1.000 | 1.000 |
+| recall | 1.000 | 1.000 |
+| resolution rate | 0.828 | 1.000 |
+| stage accuracy | 0.860 | 0.820 |
+| company accuracy | 0.900 | 0.960 |
+
+Read it honestly: the synthetic set is clean by construction, so binary
+scores are a floor check, not a hard benchmark — the interesting rows are
+resolution (what the free tier punts to a human) and the stage/company
+split, where the regex tier actually beats the LLM on stage vocabulary
+while losing on company naming. When the demo dataset changes, update
+`evals/gold_demo.py` — an assertion fails loudly if the counts drift.
+
 ## Where things live
 
 | Path | What |
