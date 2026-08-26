@@ -27,18 +27,22 @@ docker compose exec app jobd demo # seed + classify a synthetic mailbox
 # open http://localhost:8100
 ```
 
-`jobd demo` ingests ~60 synthetic messages (fictional companies on the
-reserved `.example` TLD) through the real ingest path and classifies them
-with the free rule-based extractor. The dashboard then has companies,
-applications, an accepted offer, a declined offer, rejections, a ghosted
-process, and a review queue — every page has content. The demo refuses to
-run twice against the same database; `docker compose down -v` resets
-everything.
+`jobd demo` ingests 109 synthetic messages through the real ingest path and
+classifies them with the free rule-based extractor. The employers are the
+Forbes AI 50 (2026) — all fifty appear, from full interview arcs (an
+accepted offer at Anthropic, a declined one at OpenAI, a live onsite loop,
+ghostings, agency pitches) down to the acknowledgement-only applies most of
+a real pipeline is made of. The companies are real; every message,
+recruiter and event is invented, and the two staffing agencies plus the
+user's own address live on the reserved `.example` TLD. The dashboard then
+has companies, applications, offers, rejections, and a review queue —
+every page has content. The demo refuses to run twice against the same
+database; `docker compose down -v` resets everything.
 
 Verify it worked:
 
 ```bash
-docker compose exec db psql -U jobd -c "SELECT count(*) FROM message;"   # 58
+docker compose exec db psql -U jobd -c "SELECT count(*) FROM message;"   # 109
 docker compose exec db psql -U jobd -c "SELECT canonical_name FROM company;"
 curl -s localhost:8100/api/runs | head -c 200
 ```
@@ -104,28 +108,29 @@ Design invariants an agent should preserve when extending this code:
 
 ## Evals
 
-The classifier is measured, not vibes-checked. `evals/` holds an
-[Inspect](https://inspect.aisi.org.uk/) task that scores the message
-classifier against gold labels for the synthetic mailbox (ground truth is
-known by construction — `evals/gold_demo.py`):
+The classifier is measured, not vibes-checked. `evals/` holds a
+[DeepEval](https://deepeval.com/) suite that scores the message classifier
+against gold labels for the synthetic mailbox (ground truth is known by
+construction — `evals/gold_demo.py`): every demo message is a test case,
+every quality dimension a deterministic metric.
 
 ```bash
 pip install -e ".[eval]"
 python evals/run.py                                        # free tier, offline
 python evals/run.py --model openrouter/google/gemini-3.7-flash   # paid tier
-inspect view --log-dir evals/logs                          # per-sample browser
+python evals/run.py --verbose                              # per-case report
 ```
 
-Current scorecard (58 messages; job-relatedness is binary, stage and
+Current scorecard (109 messages; job-relatedness is binary, stage and
 company are scored over gold job-related messages):
 
 | metric | free tier (prefilter + rules) | gemini-3.7-flash |
 |---|---|---|
 | precision | 1.000 | 1.000 |
 | recall | 1.000 | 1.000 |
-| resolution rate | 0.828 | 1.000 |
-| stage accuracy | 0.860 | 0.820 |
-| company accuracy | 0.900 | 0.960 |
+| resolution rate | 0.853 | 1.000 |
+| stage accuracy | 0.941 | 0.842 |
+| company accuracy | 0.950 | 0.990 |
 
 Read it honestly: the synthetic set is clean by construction, so binary
 scores are a floor check, not a hard benchmark — the interesting rows are

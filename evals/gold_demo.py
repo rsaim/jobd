@@ -7,9 +7,12 @@ the user's own job search (`job_related`), which pipeline stage it proves
 (`stage`, in the vocabulary `_STAGE_RULES` records), and which employer it
 belongs to (`company`; agencies resolve to the client when one is named).
 
-Bulk job-board digests are labeled NOT job-related on purpose: they contain
-job vocabulary but are broadcast noise, not evidence of the user's process —
-exactly the distinction the prefilter exists to draw.
+Outbound replies carry `stage=None` on purpose: a reply confirming an
+interview slot proves availability, not a new stage — the inbound message
+that scheduled it already carries the stage. Bulk job-board digests are
+labeled NOT job-related on purpose: they contain job vocabulary but are
+broadcast noise, not evidence of the user's process — exactly the
+distinction the prefilter exists to draw.
 """
 
 from __future__ import annotations
@@ -25,72 +28,128 @@ class Gold:
 
 
 GOLD: list[Gold] = [
-    # 0-7: Acme Robotics — applied → screens → onsite → offer → accepted
-    Gold(True, "applied", "Acme Robotics"),
-    Gold(True, "recruiter_screen", "Acme Robotics"),
-    Gold(True, None, "Acme Robotics"),                # own reply (outbound)
-    Gold(True, "technical", "Acme Robotics"),
-    Gold(True, "onsite", "Acme Robotics"),
-    Gold(True, "offer", "Acme Robotics"),
-    Gold(True, "accepted", "Acme Robotics"),          # own acceptance (outbound)
-    Gold(True, "accepted", "Acme Robotics"),
-    # 8-12: Meridian Analytics — loop → offer → declined
-    Gold(True, "applied", "Meridian Analytics"),
-    Gold(True, "onsite", "Meridian Analytics"),
-    Gold(True, "offer", "Meridian Analytics"),
-    Gold(True, "declined", "Meridian Analytics"),     # own decline (outbound)
-    Gold(True, "declined", "Meridian Analytics"),
-    # 13-16: Quill Finance — three rounds → rejected
-    Gold(True, "applied", "Quill Finance"),
-    Gold(True, "phone_screen", "Quill Finance"),
-    Gold(True, "technical", "Quill Finance"),
-    Gold(True, "rejected", "Quill Finance"),
-    # 17-18: Nimbus Cloud — applied → rejected
-    Gold(True, "applied", "Nimbus Cloud"),
-    Gold(True, "rejected", "Nimbus Cloud"),
-    # 19-21: Vector Labs — outreach → screen → ghost
-    Gold(True, None, "Vector Labs"),
-    Gold(True, None, "Vector Labs"),                  # own reply (outbound)
-    Gold(True, "recruiter_screen", "Vector Labs"),
-    # 22: Orchid Health — applied into the void
-    Gold(True, "applied", "Orchid Health"),
-    # 23-25: Beacon Search pitching Juniper Grid
-    Gold(True, None, "Juniper Grid"),
-    Gold(True, None, "Juniper Grid"),                 # own reply (outbound)
-    Gold(True, None, "Juniper Grid"),
-    # 26-29: Larkspur Systems — ghosted after technical
-    Gold(True, "applied", "Larkspur Systems"),
-    Gold(True, "phone_screen", "Larkspur Systems"),
-    Gold(True, None, "Larkspur Systems"),             # own reply (outbound)
-    Gold(True, "technical", "Larkspur Systems"),
-    # 30-35: Copper Peak — live loop at onsite
-    Gold(True, "applied", "Copper Peak"),
-    Gold(True, "recruiter_screen", "Copper Peak"),
-    Gold(True, None, "Copper Peak"),                  # own reply (outbound)
-    Gold(True, "technical", "Copper Peak"),
-    Gold(True, "onsite", "Copper Peak"),
-    Gold(True, None, "Copper Peak"),                  # own reply (outbound)
-    # 36-38: Halcyon Grid — screen → rejected
-    Gold(True, "applied", "Halcyon Grid"),
-    Gold(True, "phone_screen", "Halcyon Grid"),
-    Gold(True, "rejected", "Halcyon Grid"),
-    # 39-41: Tidegate Security — onsite → rejected
-    Gold(True, "applied", "Tidegate Security"),
-    Gold(True, "onsite", "Tidegate Security"),
-    Gold(True, "rejected", "Tidegate Security"),
-    # 42-43: Sable Mountain Capital — withdrawn
-    Gold(True, "applied", "Sable Mountain Capital"),
-    Gold(True, "withdrawn", "Sable Mountain Capital"),
+    # 0-7: Anthropic — applied → screens → onsite → offer → accepted
+    Gold(True, "applied", "Anthropic"),
+    Gold(True, "recruiter_screen", "Anthropic"),
+    Gold(True, None, "Anthropic"),                    # own reply (outbound)
+    Gold(True, "technical", "Anthropic"),
+    Gold(True, "onsite", "Anthropic"),
+    Gold(True, "offer", "Anthropic"),
+    Gold(True, "accepted", "Anthropic"),              # own acceptance (outbound)
+    Gold(True, "accepted", "Anthropic"),
+    # 8-12: OpenAI — loop → offer → declined
+    Gold(True, "applied", "OpenAI"),
+    Gold(True, "onsite", "OpenAI"),
+    Gold(True, "offer", "OpenAI"),
+    Gold(True, "declined", "OpenAI"),                 # own decline (outbound)
+    Gold(True, "declined", "OpenAI"),
+    # 13-16: Databricks — three rounds → rejected
+    Gold(True, "applied", "Databricks"),
+    Gold(True, "phone_screen", "Databricks"),
+    Gold(True, "technical", "Databricks"),
+    Gold(True, "rejected", "Databricks"),
+    # 17-18: Perplexity — applied → rejected
+    Gold(True, "applied", "Perplexity"),
+    Gold(True, "rejected", "Perplexity"),
+    # 19-21: Mistral AI — outreach → screen → ghost
+    Gold(True, None, "Mistral AI"),
+    Gold(True, None, "Mistral AI"),                   # own reply (outbound)
+    Gold(True, "recruiter_screen", "Mistral AI"),
+    # 22: Cohere — applied into the void
+    Gold(True, "applied", "Cohere"),
+    # 23-25: Beacon Search pitching Cursor
+    Gold(True, None, "Cursor"),
+    Gold(True, None, "Cursor"),                       # own reply (outbound)
+    Gold(True, None, "Cursor"),
+    # 26-29: Cognition — ghosted after technical
+    Gold(True, "applied", "Cognition"),
+    Gold(True, "phone_screen", "Cognition"),
+    Gold(True, None, "Cognition"),                    # own reply (outbound)
+    Gold(True, "technical", "Cognition"),
+    # 30-35: Thinking Machines Lab — live loop at onsite
+    Gold(True, "applied", "Thinking Machines Lab"),
+    Gold(True, "recruiter_screen", "Thinking Machines Lab"),
+    Gold(True, None, "Thinking Machines Lab"),        # own reply (outbound)
+    Gold(True, "technical", "Thinking Machines Lab"),
+    Gold(True, "onsite", "Thinking Machines Lab"),
+    Gold(True, None, "Thinking Machines Lab"),        # own reply (outbound)
+    # 36-38: ElevenLabs — screen → rejected
+    Gold(True, "applied", "ElevenLabs"),
+    Gold(True, "phone_screen", "ElevenLabs"),
+    Gold(True, "rejected", "ElevenLabs"),
+    # 39-41: Cyera — onsite → rejected
+    Gold(True, "applied", "Cyera"),
+    Gold(True, "onsite", "Cyera"),
+    Gold(True, "rejected", "Cyera"),
+    # 42-43: Safe Superintelligence — withdrawn
+    Gold(True, "applied", "Safe Superintelligence"),
+    Gold(True, "withdrawn", "Safe Superintelligence"),
     # 44-45: cold applies
-    Gold(True, "applied", "Bluewren Data"),
-    Gold(True, "applied", "Fernwood Biotech"),
-    # 46: Northgate — unanswered direct outreach
-    Gold(True, None, "Northgate Semiconductors"),
+    Gold(True, "applied", "Fireworks AI"),
+    Gold(True, "applied", "Abridge"),
+    # 46: SambaNova — unanswered direct outreach
+    Gold(True, None, "SambaNova"),
     # 47-49: Harbor Talent Partners — agency, two clients
     Gold(True, None, "Harbor Talent Partners"),
     Gold(True, None, "Harbor Talent Partners"),       # own reply (outbound)
-    Gold(True, None, "Halcyon Grid"),
-    # 50-57: noise
+    Gold(True, None, "ElevenLabs"),
+    # 50-67: applied → rejected, nine companies
+    Gold(True, "applied", "Harvey"),
+    Gold(True, "rejected", "Harvey"),
+    Gold(True, "applied", "Glean"),
+    Gold(True, "rejected", "Glean"),
+    Gold(True, "applied", "Notion"),
+    Gold(True, "rejected", "Notion"),
+    Gold(True, "applied", "Runway"),
+    Gold(True, "rejected", "Runway"),
+    Gold(True, "applied", "Together AI"),
+    Gold(True, "rejected", "Together AI"),
+    Gold(True, "applied", "Baseten"),
+    Gold(True, "rejected", "Baseten"),
+    Gold(True, "applied", "Sierra"),
+    Gold(True, "rejected", "Sierra"),
+    Gold(True, "applied", "Midjourney"),
+    Gold(True, "rejected", "Midjourney"),
+    Gold(True, "applied", "Skild AI"),
+    Gold(True, "rejected", "Skild AI"),
+    # 68-75: applied → phone screen being scheduled, four companies
+    Gold(True, "applied", "Crusoe"),
+    Gold(True, "phone_screen", "Crusoe"),
+    Gold(True, "applied", "Decagon"),
+    Gold(True, "phone_screen", "Decagon"),
+    Gold(True, "applied", "Clay"),
+    Gold(True, "phone_screen", "Clay"),
+    Gold(True, "applied", "Physical Intelligence"),
+    Gold(True, "phone_screen", "Physical Intelligence"),
+    # 76-81: applied → recruiter intro call, three companies
+    Gold(True, "applied", "Replit"),
+    Gold(True, "recruiter_screen", "Replit"),
+    Gold(True, "applied", "Suno"),
+    Gold(True, "recruiter_screen", "Suno"),
+    Gold(True, "applied", "World Labs"),
+    Gold(True, "recruiter_screen", "World Labs"),
+    # 82-88: recruiter openers, never answered
+    Gold(True, None, "Reflection"),
+    Gold(True, None, "EliseAI"),
+    Gold(True, None, "Genspark"),
+    Gold(True, None, "Listen Labs"),
+    Gold(True, None, "Rogo"),
+    Gold(True, None, "Surge AI"),
+    Gold(True, None, "Mercor"),
+    # 89-100: cold applies, acknowledgement only
+    Gold(True, "applied", "Lovable"),
+    Gold(True, "applied", "Fal"),
+    Gold(True, "applied", "OpenEvidence"),
+    Gold(True, "applied", "Chai Discovery"),
+    Gold(True, "applied", "Synthesia"),
+    Gold(True, "applied", "HeyGen"),
+    Gold(True, "applied", "Black Forest Labs"),
+    Gold(True, "applied", "Krea"),
+    Gold(True, "applied", "Gamma"),
+    Gold(True, "applied", "Legora"),
+    Gold(True, "applied", "Applied Intuition"),
+    Gold(True, "applied", "Speak"),
+    # 101-108: noise
     Gold(False),  # job-board digest (bulk)
     Gold(False),  # newsletter
     Gold(False),  # bank statement

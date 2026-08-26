@@ -29,9 +29,10 @@ docker compose exec app jobd demo     # synthetic mailbox through the real pipel
 # open http://localhost:8100
 ```
 
-`jobd demo` seeds a believable synthetic job search (fictional companies on
-the reserved `.example` TLD) and classifies it with the free deterministic
-tier — no API keys, no Gmail, no cloud. Every dashboard page has content in
+`jobd demo` seeds a believable synthetic job search — applications, loops,
+offers and rejections across all fifty Forbes AI 50 (2026) companies; the
+employers are real, every message and event is invented — and classifies it
+with the free deterministic tier: no API keys, no Gmail, no cloud. Every dashboard page has content in
 under two minutes. For real Gmail ingestion, LLM extraction, and agent-driven
 setup, see [AGENTS.md](AGENTS.md) and [docs/gmail-setup.md](docs/gmail-setup.md).
 
