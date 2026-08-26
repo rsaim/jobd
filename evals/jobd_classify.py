@@ -1,45 +1,48 @@
-"""Inspect eval of jobd's message classifier against the demo gold set.
+"""DeepEval suite for jobd's message classifier, against the demo gold set.
 
-Built on Inspect (https://inspect.aisi.org.uk/), the UK AI Safety
-Institute's open-source eval framework, so the runs, logs and metrics use a
-standard toolchain rather than a homegrown script — `inspect view` renders
-every sample's prediction next to its gold label.
+Built on DeepEval (https://deepeval.com/), Confident AI's open-source eval
+framework, so runs use a standard toolchain rather than a homegrown script:
+each demo message becomes an `LLMTestCase`, each quality dimension is a
+deterministic `BaseMetric`, and `deepeval`'s runner handles execution and
+per-case reporting.
 
 What is measured, per message (message-level, deliberately: the thread
 cache and carry layers are cost optimizations on top of this — the
 classifier's raw quality is the number that has to hold):
 
-- job-relatedness precision/recall/F1 — prediction = "the pipeline did NOT
-  auto-drop it". A false negative here is real job mail silently discarded,
-  the one unrecoverable error; a false positive is junk sent onward.
-- resolution rate — how much the tier settles on its own (`positive` or
-  `negative`) vs punts to the review queue. Punting is safe but costs a
+- job-relatedness — prediction = "the pipeline did NOT auto-drop it". A
+  false negative here is real job mail silently discarded, the one
+  unrecoverable error; a false positive is junk sent onward. The corpus
+  precision/recall/F1 in the scorecard aggregate this metric's confusion
+  counts.
+- resolution — did the tier settle the message on its own (`positive` or
+  `negative`) vs punting to the review queue. Punting is safe but costs a
   human (or a paid model) per message.
-- stage accuracy — over gold job-related messages, does the predicted
-  stage match (None counts, so over-claiming a stage is penalized).
-- company accuracy — over gold job-related messages, normalized name match
-  (domain-derived crude names like "Quill-finance" count for
-  "Quill Finance"; the entity resolver merges those spellings later).
+- stage accuracy — over gold job-related messages only (skipped
+  elsewhere), does the predicted stage match (None counts, so over-claiming
+  a stage is penalized).
+- company accuracy — over gold job-related messages only, normalized name
+  match (domain-derived crude names like "Runwayml" count for "Runway";
+  the entity resolver merges those spellings later).
 
-Solvers:
-- free tier (default): metadata prefilter, then the regex extractor —
-  zero network, runs anywhere.
-- any LiteLLM model: `-T model=openrouter/google/gemini-3.7-flash` runs the
-  same messages through the paid extractor for a tier-vs-tier comparison.
+The pipeline under test is the real decision procedure: the metadata
+prefilter answers first (free, and the only layer that sees bulk markers);
+what it can't settle goes to the extractor — the regex provider by
+default, or any LiteLLM model when `model` is passed.
 
-Run:  .venv/bin/python evals/run.py            # free tier
+Run:  .venv/bin/python evals/run.py            # free tier, offline
       .venv/bin/python evals/run.py --model openrouter/google/gemini-3.7-flash
 """
 
 from __future__ import annotations
 
 import email
+import json
+from email import policy
 from typing import Any
 
-from inspect_ai import Task, task
-from inspect_ai.dataset import MemoryDataset, Sample
-from inspect_ai.scorer import Metric, Score, Target, metric, scorer
-from inspect_ai.solver import Generate, TaskState, solver
+from deepeval.metrics import BaseMetric
+from deepeval.test_case import LLMTestCase
 
 from jobd.adapters.llm.rulebased import RuleBasedProvider
 from jobd.domain import prefilter
@@ -49,44 +52,10 @@ from jobd.services.demo import demo_messages
 from gold_demo import GOLD
 
 
-def _samples() -> list[Sample]:
-    out: list[Sample] = []
-    for i, raw in enumerate(demo_messages()):
-        msg = email.message_from_bytes(raw.payload)
-        gold = GOLD[i]
-        body = msg.get_payload()
-        rendered = render_for_model(
-            sender=msg["From"],
-            recipient=msg["To"],
-            subject=msg["Subject"],
-            body=body,
-            date=msg["Date"],
-            labels=raw.metadata.get("labels"),
-        )
-        out.append(
-            Sample(
-                id=f"demo-{i:04d}",
-                input=rendered,
-                target="job-related" if gold.job_related else "not-job-related",
-                metadata={
-                    "sender": msg["From"],
-                    "labels": raw.metadata.get("labels", ""),
-                    "is_bulk": bool(msg["List-Unsubscribe"]),
-                    "gold_job_related": gold.job_related,
-                    "gold_stage": gold.stage,
-                    "gold_company": gold.company,
-                },
-            )
-        )
-    return out
-
-
-@solver
-def classify_free_tier(model: str | None = None):
-    """The pipeline's own decision procedure, message-level: the metadata
-    prefilter answers first (free, and the only layer that sees bulk
-    markers); what it can't settle goes to the extractor — the regex
-    provider by default, or a LiteLLM model when `model` is passed."""
+def build_cases(model: str | None = None) -> list[LLMTestCase]:
+    """Run every demo message through the pipeline's decision procedure and
+    wrap the (prediction, gold) pair in a test case. The metrics below read
+    both from `metadata`, so no metric re-runs the classifier."""
     extractor: Any = (
         RuleBasedProvider()
         if model is None
@@ -94,33 +63,61 @@ def classify_free_tier(model: str | None = None):
             "jobd.adapters.llm", fromlist=["load_provider"]
         ).load_provider(model)
     )
-
-    async def solve(state: TaskState, generate: Generate) -> TaskState:
-        meta = state.metadata
+    cases: list[LLMTestCase] = []
+    for i, raw in enumerate(demo_messages()):
+        # policy.default gives get_content(), which undoes the transfer
+        # encoding — the raw payload wraps long paragraphs quoted-printable,
+        # splitting words across lines ("decided not =\nto move"), and the
+        # real ingest path decodes exactly the same way before classifying.
+        msg = email.message_from_bytes(raw.payload, policy=policy.default)
+        gold = GOLD[i]
+        labels = raw.metadata.get("labels", "")
+        rendered = render_for_model(
+            sender=msg["From"],
+            recipient=msg["To"],
+            subject=msg["Subject"],
+            body=msg.get_content(),
+            date=msg["Date"],
+            labels=labels,
+        )
         verdict = prefilter.score(
-            sender=meta["sender"],
+            sender=msg["From"],
             recipients="",
             learned=None,
-            gmail_labels=meta["labels"] or "",
-            has_list_unsubscribe=meta["is_bulk"],
+            gmail_labels=labels,
+            has_list_unsubscribe=bool(msg["List-Unsubscribe"]),
         )
         if verdict.status == "negative":
             pred = {"label": "negative", "via": "prefilter"}
         else:
-            payload = extractor.extract(
-                PROMPT, EXTRACTION_SCHEMA, text=state.input_text
-            )
+            payload = extractor.extract(PROMPT, EXTRACTION_SCHEMA, text=rendered)
             pred = {
                 "label": payload.get("label"),
                 "stage": payload.get("stage"),
                 "company_name": payload.get("company_name"),
                 "via": extractor.name,
             }
-        state.store.set("pred", pred)
-        state.output.completion = str(pred)
-        return state
-
-    return solve
+        cases.append(
+            LLMTestCase(
+                name=f"demo-{i:04d}",
+                input=rendered,
+                actual_output=json.dumps(pred),
+                expected_output=json.dumps(
+                    {
+                        "job_related": gold.job_related,
+                        "stage": gold.stage,
+                        "company": gold.company,
+                    }
+                ),
+                metadata={
+                    "pred": pred,
+                    "gold_job_related": gold.job_related,
+                    "gold_stage": gold.stage,
+                    "gold_company": gold.company,
+                },
+            )
+        )
+    return cases
 
 
 def _norm(name: str | None) -> str:
@@ -131,122 +128,139 @@ def _company_match(pred: str | None, gold: str | None) -> bool:
     a, b = _norm(pred), _norm(gold)
     if not a or not b:
         return False
-    # Prefix either way: the free extractor derives "Quill-finance" from the
-    # domain where the gold truth is "Quill Finance"; both normalize to a
-    # shared prefix. The entity resolver merges these spellings downstream.
+    # Prefix either way: the free extractor derives "Runwayml" from the
+    # domain where the gold truth is "Runway"; both normalize to a shared
+    # prefix. The entity resolver merges these spellings downstream.
     return a.startswith(b) or b.startswith(a)
 
 
-def _value(item: Any) -> dict[str, int]:
-    # Inspect has passed metrics list[SampleScore] in some versions and
-    # list[Score] in others — read the value either way.
-    score = getattr(item, "score", item)
-    return score.value  # type: ignore[no-any-return]
+class _RecordMetric(BaseMetric):
+    """Deterministic base: no judge model, binary score, threshold 0.5.
+    Subclasses implement `judge(meta) -> (score, reason)` — or set
+    `self.skipped` for cases outside their denominator."""
+
+    def __init__(self) -> None:
+        self.threshold = 0.5
+        self.async_mode = False
+
+    def measure(self, test_case: LLMTestCase, *args: Any, **kwargs: Any) -> float:
+        self.skipped = False
+        score, reason = self.judge(test_case.metadata)
+        self.score, self.reason = score, reason
+        self.success = self.skipped or score >= self.threshold
+        return self.score or 0.0
+
+    async def a_measure(
+        self, test_case: LLMTestCase, *args: Any, **kwargs: Any
+    ) -> float:
+        return self.measure(test_case)
+
+    def is_successful(self) -> bool:
+        return bool(self.success)
+
+    def judge(self, meta: dict[str, Any]) -> tuple[float, str]:
+        raise NotImplementedError
 
 
-def _total(scores: list[Any], key: str) -> int:
-    return sum(_value(s).get(key, 0) for s in scores)
+class JobRelatedness(_RecordMetric):
+    """Did the pipeline keep what mattered and drop what didn't?"""
 
+    @property
+    def __name__(self) -> str:  # type: ignore[override]
+        return "Job-relatedness"
 
-def _rate(scores: list[Any], num: str, den: str) -> float:
-    d = _total(scores, den)
-    return _total(scores, num) / d if d else 0.0
-
-
-@metric
-def precision() -> Metric:
-    def compute(scores: list[Any]) -> float:
-        tp, fp = _total(scores, "tp"), _total(scores, "fp")
-        return tp / (tp + fp) if tp + fp else 0.0
-
-    return compute
-
-
-@metric
-def recall() -> Metric:
-    def compute(scores: list[Any]) -> float:
-        tp, fn = _total(scores, "tp"), _total(scores, "fn")
-        return tp / (tp + fn) if tp + fn else 0.0
-
-    return compute
-
-
-@metric
-def f1() -> Metric:
-    def compute(scores: list[Any]) -> float:
-        tp = _total(scores, "tp")
-        fp, fn = _total(scores, "fp"), _total(scores, "fn")
-        return 2 * tp / (2 * tp + fp + fn) if tp else 0.0
-
-    return compute
-
-
-@metric
-def resolution_rate() -> Metric:
-    return lambda scores: _rate(scores, "resolved", "n")
-
-
-@metric
-def stage_accuracy() -> Metric:
-    return lambda scores: _rate(scores, "stage_ok", "stage_n")
-
-
-@metric
-def company_accuracy() -> Metric:
-    return lambda scores: _rate(scores, "company_ok", "company_n")
-
-
-@scorer(
-    metrics=[
-        precision(),
-        recall(),
-        f1(),
-        resolution_rate(),
-        stage_accuracy(),
-        company_accuracy(),
-    ]
-)
-def record_scorer():
-    async def score(state: TaskState, target: Target) -> Score:
-        pred = state.store.get("pred") or {}
-        gold_jr = bool(state.metadata["gold_job_related"])
-        pred_jr = pred.get("label") != "negative"
-        value: dict[str, int] = {
-            "n": 1,
-            "tp": int(pred_jr and gold_jr),
-            "fp": int(pred_jr and not gold_jr),
-            "tn": int(not pred_jr and not gold_jr),
-            "fn": int(not pred_jr and gold_jr),
-            "resolved": int(pred.get("label") in ("positive", "negative")),
-        }
-        if gold_jr:
-            value["stage_n"] = 1
-            value["stage_ok"] = int(
-                (pred.get("stage") or None) == state.metadata["gold_stage"]
-            )
-            value["company_n"] = 1
-            value["company_ok"] = int(
-                _company_match(
-                    pred.get("company_name"), state.metadata["gold_company"]
-                )
-            )
-        return Score(
-            value=value,
-            answer=str(pred),
-            explanation=(
-                f"gold: job_related={gold_jr} "
-                f"stage={state.metadata['gold_stage']} "
-                f"company={state.metadata['gold_company']}"
-            ),
+    def judge(self, meta: dict[str, Any]) -> tuple[float, str]:
+        pred_jr = meta["pred"].get("label") != "negative"
+        gold_jr = meta["gold_job_related"]
+        ok = pred_jr == gold_jr
+        return float(ok), (
+            f"pipeline {'kept' if pred_jr else 'dropped'}, "
+            f"gold says {'job mail' if gold_jr else 'noise'}"
         )
 
-    return score
+
+class Resolution(_RecordMetric):
+    """Did the tier settle the message without a human?"""
+
+    @property
+    def __name__(self) -> str:  # type: ignore[override]
+        return "Resolution"
+
+    def judge(self, meta: dict[str, Any]) -> tuple[float, str]:
+        label = meta["pred"].get("label")
+        resolved = label in ("positive", "negative")
+        return float(resolved), f"label={label}" + (
+            "" if resolved else " — punted to the review queue"
+        )
 
 
-@task
-def jobd_classify(model: str | None = None) -> Task:
-    return Task(
-        dataset=MemoryDataset(_samples()),
-        solver=classify_free_tier(model),
-        scorer=record_scorer(),
-    )
+class StageAccuracy(_RecordMetric):
+    """Over gold job-related messages: exact stage match, None included."""
+
+    @property
+    def __name__(self) -> str:  # type: ignore[override]
+        return "Stage accuracy"
+
+    def judge(self, meta: dict[str, Any]) -> tuple[float, str]:
+        if not meta["gold_job_related"]:
+            self.skipped = True
+            return 0.0, "not job-related in gold — stage not scored"
+        pred = meta["pred"].get("stage") or None
+        gold = meta["gold_stage"]
+        return float(pred == gold), f"predicted {pred!r}, gold {gold!r}"
+
+
+class CompanyAccuracy(_RecordMetric):
+    """Over gold job-related messages: normalized prefix name match."""
+
+    @property
+    def __name__(self) -> str:  # type: ignore[override]
+        return "Company accuracy"
+
+    def judge(self, meta: dict[str, Any]) -> tuple[float, str]:
+        if not meta["gold_job_related"]:
+            self.skipped = True
+            return 0.0, "not job-related in gold — company not scored"
+        pred = meta["pred"].get("company_name")
+        gold = meta["gold_company"]
+        return float(_company_match(pred, gold)), f"predicted {pred!r}, gold {gold!r}"
+
+
+def metrics() -> list[BaseMetric]:
+    return [JobRelatedness(), Resolution(), StageAccuracy(), CompanyAccuracy()]
+
+
+def scorecard(cases: list[LLMTestCase]) -> dict[str, float]:
+    """Corpus-level numbers DeepEval's per-case averages can't express:
+    precision/recall/F1 need the confusion counts pooled across the run."""
+    tp = fp = fn = resolved = 0
+    stage_n = stage_ok = company_n = company_ok = 0
+    for case in cases:
+        meta = case.metadata
+        pred, gold_jr = meta["pred"], meta["gold_job_related"]
+        pred_jr = pred.get("label") != "negative"
+        tp += pred_jr and gold_jr
+        fp += pred_jr and not gold_jr
+        fn += (not pred_jr) and gold_jr
+        resolved += pred.get("label") in ("positive", "negative")
+        if gold_jr:
+            stage_n += 1
+            stage_ok += (pred.get("stage") or None) == meta["gold_stage"]
+            company_n += 1
+            company_ok += _company_match(
+                pred.get("company_name"), meta["gold_company"]
+            )
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": (
+            2 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        ),
+        "resolution_rate": resolved / len(cases) if cases else 0.0,
+        "stage_accuracy": stage_ok / stage_n if stage_n else 0.0,
+        "company_accuracy": company_ok / company_n if company_n else 0.0,
+    }

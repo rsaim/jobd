@@ -53,10 +53,10 @@ dev = ["ruff>=0.6", "mypy>=1.11"]
 # fires — every earlier local test happened to succeed on the first attempt,
 # so this was silently unmet until a real sustained run hit real rate limits.
 llm = ["litellm>=1.50", "tenacity>=8.0"]
-# The classification eval harness (evals/) — Inspect is the UK AI Safety
-# Institute's open-source eval framework; `evals/run.py` and `inspect view`
-# both need it. Its own dependency tree is heavy, hence an extra.
-eval = ["inspect-ai>=0.3"]
+# The classification eval harness (evals/) — DeepEval is Confident AI's
+# open-source eval framework; `evals/run.py` builds its test cases and
+# metrics on it. Its own dependency tree is heavy, hence an extra.
+eval = ["deepeval>=3.0"]
 # M6, automated LinkedIn sync (adapters/linkedin/voyager_source.py). An
 # unofficial Voyager wrapper — cookie-authed, no official message API exists.
 # Lazy-imported: a default install neither pays for it nor depends on it, and
