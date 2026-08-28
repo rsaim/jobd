@@ -11,7 +11,7 @@
 
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: jobd
       POSTGRES_PASSWORD: jobd
