@@ -44,7 +44,7 @@ from uuid import UUID
 
 import psycopg
 
-from jobd.domain import active_learning, learning, prefilter
+from jobd.domain import active_learning, exploration, learning, prefilter
 from jobd.domain.envelope import body_text
 from jobd.domain.extraction import (
     EXTRACTION_SCHEMA,
@@ -596,10 +596,28 @@ def _one(
         gmail_labels=raw_metadata.get("labels", ""),
         has_list_unsubscribe=_is_bulk(payload),
     )
-    if verdict.status == "negative":
+    # Algorithm improvement #3: exploration budget for negative rules.
+    # A small fraction (2%) of messages a negative *learned rule* would drop
+    # are routed through the model anyway — if they come back positive, the
+    # rule is demoted for human review. This prevents the "silently hide real
+    # mail forever" failure mode when domains get re-purposed.
+    explore_decision = None
+    if verdict.status == "negative" and learned == "negative":
+        # This negative verdict came from a learned rule (not Gmail labels
+        # or bulk headers) — candidate for exploration. Determine match type
+        # from what we know: if learned_domain is not None, it was a domain
+        # rule; otherwise check if sender matches an address rule.
+        match_type = "domain" if learned_domain is not None else "address"
+        match_value = learned_domain if learned_domain else sender.lower().strip().strip("<>")
+        explore_decision = exploration.should_explore_negative(match_type, match_value)
+
+    if verdict.status == "negative" and (explore_decision is None or not explore_decision.explore):
+        # Apply the negative verdict: either not from a learned rule, or
+        # exploration decided not to sample this one (98% of the time).
         out.filtered_out += 1
         repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
         return
+    # If explore_decision.explore is True, fall through to model classification
 
     # Zero-cost path: some other message in this exact conversation chain, or
     # a human-confirmed rule about this sender's domain/address, already
