@@ -1823,11 +1823,22 @@ def serve(host: str, port: int) -> None:
 )
 @click.option("--model", default="default", show_default=True, envvar="JOBD_MODEL")
 @click.option("--classify/--no-classify", default=True, show_default=True)
+@click.option(
+    "--workers",
+    default=32,
+    show_default=True,
+    help="Thread-pool size for the raw fetch (I/O-bound, so real parallelism "
+    "even in Python).",
+)
 @click.confirmation_option(
     prompt="This drops the derived record and rebuilds it from raw. Continue?"
 )
 def rebuild(
-    bucket: str | None, local_store: Path | None, model: str, classify: bool
+    bucket: str | None,
+    local_store: Path | None,
+    model: str,
+    classify: bool,
+    workers: int,
 ) -> None:
     """Re-derive everything from raw storage (I3).
 
@@ -1847,6 +1858,7 @@ def rebuild(
             repos=_repos(conn),
             conn=conn,
             classify=classify,
+            workers=workers,
         )
         conn.commit()
 
@@ -1857,6 +1869,49 @@ def rebuild(
     if result.classification:
         click.echo(f"recorded           {result.classification.recorded}")
         click.echo(f"queued             {result.classification.queued_for_review}")
+
+
+@main.command("import")
+@click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket holding raw messages.")
+@click.option(
+    "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
+)
+@click.option(
+    "--workers",
+    default=32,
+    show_default=True,
+    help="Thread-pool size for the raw fetch (I/O-bound).",
+)
+@click.option(
+    "--batch", default=1000, show_default=True, help="Messages per commit."
+)
+def import_archive(
+    bucket: str | None, local_store: Path | None, workers: int, batch: int
+) -> None:
+    """Import a raw-message archive into the record — idempotent, resumable.
+
+    For a raw dump some other tool already wrote to storage (in jobd's
+    content-hashed envelope layout): reads every key, inserts the message rows
+    that are missing, and commits in batches. Safe to re-run — a killed import
+    resumes where it left off rather than starting over, and never truncates.
+    """
+    from jobd.services.rebuild import import_store
+
+    storage = _storage(bucket, local_store)
+    with _connect() as conn:
+        result = import_store(
+            storage=storage,
+            repos=_repos(conn),
+            conn=conn,
+            workers=workers,
+            batch=batch,
+        )
+        conn.commit()
+    click.echo(f"keys seen       {result.keys_seen}")
+    click.echo(f"inserted        {result.messages_inserted}")
+    click.echo(f"already present {result.already_present}")
+    for bad in result.unreadable[:10]:
+        click.echo(f"  UNREADABLE {bad}", err=True)
 
 
 if __name__ == "__main__":

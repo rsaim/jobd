@@ -518,6 +518,26 @@ class MessageRepository(Repository):
         ).fetchall()
         return {row[0] for row in rows}
 
+    def known_storage_keys(self, keys: list[str]) -> set[str]:
+        """Which of these storage keys already have a message row.
+
+        The resumable half of `services.import_store`: a raw archive import
+        killed mid-run re-lists the archive, asks this once, and only fetches
+        the keys whose rows are missing — the same "skip the expensive fetch"
+        logic `known_external_ids` gives the Gmail day-worker, keyed by the
+        content hash instead of the source id."""
+        if not keys:
+            return set()
+        out: set[str] = set()
+        for start in range(0, len(keys), 5000):
+            chunk = keys[start : start + 5000]
+            rows = self._conn.execute(
+                "SELECT storage_key FROM message WHERE storage_key = ANY(%s)",
+                (list(chunk),),
+            ).fetchall()
+            out.update(row[0] for row in rows)
+        return out
+
     def for_company(self, company_id: UUID) -> list[Message]:
         rows = self._conn.execute(
             f"SELECT {_MESSAGE_COLS} FROM message WHERE company_id = %s"

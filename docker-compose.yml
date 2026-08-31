@@ -16,6 +16,11 @@ services:
       POSTGRES_USER: jobd
       POSTGRES_PASSWORD: jobd
       POSTGRES_DB: jobd
+    # Published so the host CLI (the non-Docker local-dev path in AGENTS.md,
+    # which expects localhost:5432) can reach the same database the app
+    # container uses — one store, two entry points, no separate "host DB".
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
