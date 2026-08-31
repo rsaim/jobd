@@ -1590,7 +1590,7 @@ def chat_turn(request: Request, body: ChatBody) -> StreamingResponse:
         raise HTTPException(
             status_code=400,
             detail=f"{model!r} has no chat capability "
-            "(rulebased/ollama providers implement extract() only).",
+            "(the ollama provider implements extract() only).",
         )
 
     message_text = body.message
@@ -1624,7 +1624,7 @@ def chat_turn(request: Request, body: ChatBody) -> StreamingResponse:
 class ScrapeStartBody(BaseModel):
     accounts: list[str] = []
     window_days: int | None = None
-    model: str = "rulebased"
+    model: str = "default"
 
 
 #: The whole-pipeline runner behind the Scrape page's "Full pipeline" card.

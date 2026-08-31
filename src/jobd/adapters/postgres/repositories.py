@@ -18,7 +18,6 @@ from uuid import UUID
 
 import psycopg
 
-from jobd.domain.prefilter import GENERIC_DOMAINS
 from jobd.domain.record import (
     Application,
     Company,
@@ -31,6 +30,7 @@ from jobd.domain.record import (
     SenderRule,
     StageEvent,
 )
+from jobd.domain.resolve import GENERIC_DOMAINS
 
 
 class Repository:
@@ -819,7 +819,9 @@ class MessageRepository(Repository):
             (by, message_id),
         )
 
-    def clear_classification(self, limit: int = 2000) -> int:
+    def clear_classification(
+        self, limit: int = 2000, partition: tuple[int, int] | None = None
+    ) -> int:
         """Reset one batch of already-classified messages. Returns the count
         actually touched (0 means nothing left to clear).
 
@@ -834,12 +836,21 @@ class MessageRepository(Repository):
         calling this (see cli.main's reclassify loop) and commits per batch,
         so a slow disk sees steady partial progress instead of a single
         multi-minute statement.
+
+        `partition=(k, n)` restricts to the k-th of n disjoint hash slices
+        of the id space, so n workers can reclassify concurrently on their
+        own partitions without stepping on each other's rows.
         """
+        where_parts = ["classified_at IS NOT NULL"]
+        params: list[int] = []
+        if partition is not None:
+            k, n = partition
+            where_parts.append(f"(hashtext(id::text) % {n}) = {k}")
+        where = " AND ".join(where_parts)
         cursor = self._conn.execute(
             "UPDATE message SET classified_at = NULL, classified_by = NULL,"
             " company_id = NULL, application_id = NULL, contact_id = NULL"
-            " WHERE id IN (SELECT id FROM message"
-            "   WHERE classified_at IS NOT NULL LIMIT %s)",
+            f" WHERE id IN (SELECT id FROM message WHERE {where} LIMIT %s)",
             (limit,),
         )
         return cursor.rowcount
@@ -1055,6 +1066,38 @@ class MessageRepository(Repository):
             (literal, message_id),
         )
 
+    def has_embeddings(self) -> bool:
+        """True once at least one message is embedded — the cheap existence
+        check that gates `classify._similar_examples_context` before it pays
+        for an embed call on a mailbox that was never embedded."""
+        row = self._one(
+            "SELECT 1 FROM message WHERE embedding IS NOT NULL LIMIT 1", ()
+        )
+        return row is not None
+
+    def similar_resolved(
+        self, vector: list[float], *, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """The k already-resolved messages nearest a query vector (pgvector
+        cosine distance, `<=>`) — the retrieval half of classify's few-shot
+        for uncertain messages (algorithm-improvements.md #4). Resolved only:
+        a message with no `company_id` was never a useful example for "what
+        company is this about"."""
+        literal = "[" + ",".join(repr(float(v)) for v in vector) + "]"
+        rows = self._conn.execute(
+            """
+            SELECT c.canonical_name, m.subject, m.sent_at
+            FROM message m JOIN company c ON c.id = m.company_id
+            WHERE m.embedding IS NOT NULL AND m.company_id IS NOT NULL
+            ORDER BY m.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (literal, limit),
+        ).fetchall()
+        return [
+            {"company": r[0], "subject": r[1], "sent_at": r[2]} for r in rows
+        ]
+
     def search(self, query: str, limit: int = 50) -> list[Message]:
         """Full-text search over subject and body.
 
@@ -1133,6 +1176,21 @@ class StageEventRepository(Repository):
     def iter_all(self) -> Iterator[UUID]:
         for row in self._conn.execute("SELECT id FROM stage_event").fetchall():
             yield UUID(str(row[0]))
+
+    def latest_terminal(self, application_id: UUID) -> datetime | None:
+        """The `occurred_at` of the application's most recent terminal stage
+        (`rejected`/`withdrawn`/`accepted`/`declined`), or None when the
+        process is still open. `_record`'s stage-monotonicity guard
+        (algorithm-improvements.md #5) consults this before asserting a new
+        non-terminal stage: a non-terminal event on or after a terminal one
+        is a contradiction the timeline must not silently absorb."""
+        row = self._one(
+            "SELECT max(occurred_at) FROM stage_event"
+            " WHERE application_id = %s"
+            " AND stage IN ('rejected', 'withdrawn', 'accepted', 'declined')",
+            (application_id,),
+        )
+        return row[0] if row and row[0] is not None else None
 
 
 # --------------------------------------------------------------------- helpers
@@ -1236,11 +1294,22 @@ class ReviewQueueRepository(Repository):
         return UUID(str(row[0]))
 
     def pending(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Open items, oldest first."""
+        """Open items, impact-ranked (algorithm-improvements.md #2): the
+        decision that clears the most residue first, rather than oldest-first.
+        `fanout` is the number of other unresolved messages sharing the
+        sender domain — the human's leverage on this one decision."""
         rows = self._conn.execute(
-            "SELECT id, message_id, extraction, confidence, reason, extracted_by,"
-            " created_at FROM review_queue WHERE status = 'pending'"
-            " ORDER BY created_at LIMIT %s",
+            "SELECT rq.id, rq.message_id, rq.extraction, rq.confidence, rq.reason,"
+            " rq.extracted_by, rq.created_at,"
+            " (SELECT count(*) FROM message m2 WHERE m2.sender_domain = m.sender_domain"
+            "   AND m2.sender_domain IS NOT NULL AND m2.company_id IS NULL"
+            "   AND m2.classified_by IS NULL) AS fanout"
+            " FROM review_queue rq JOIN message m ON m.id = rq.message_id"
+            " WHERE rq.status = 'pending'"
+            " ORDER BY (SELECT count(*) FROM message m2 WHERE m2.sender_domain = m.sender_domain"
+            "   AND m2.sender_domain IS NOT NULL AND m2.company_id IS NULL"
+            "   AND m2.classified_by IS NULL) DESC, rq.created_at"
+            " LIMIT %s",
             (limit,),
         ).fetchall()
         return [
@@ -1252,6 +1321,7 @@ class ReviewQueueRepository(Repository):
                 "reason": r[4],
                 "extracted_by": r[5],
                 "created_at": r[6],
+                "fanout": int(r[7] or 0),
             }
             for r in rows
         ]

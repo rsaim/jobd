@@ -644,22 +644,15 @@ def _llm(model: str) -> Any:
 @main.command()
 @click.option(
     "--model",
-    default="rulebased",
+    default="default",
     show_default=True,
     envvar="JOBD_MODEL",
-    help="rulebased | ollama/<model> | any LiteLLM id. Only the last leaves "
-    "the machine.",
+    help="ollama/<model> | any LiteLLM id. 'default' resolves JOBD_MODEL, "
+    "then the built-in default. Only cloud ids leave the machine.",
 )
 @click.option("--limit", default=1000, show_default=True, help="Batch size.")
 @click.option("--all", "run_all", is_flag=True, help="Keep going until none remain.")
 @click.option("--embed", is_flag=True, help="Also compute embeddings (doubles calls).")
-@click.option(
-    "--deterministic/--no-deterministic",
-    default=True,
-    show_default=True,
-    help="Route prefilter.Status POSITIVE messages (ATS-domain hits) to the "
-    "free rule-based extractor instead of --model.",
-)
 @click.option(
     "--reclassify",
     is_flag=True,
@@ -700,7 +693,6 @@ def classify(
     limit: int,
     run_all: bool,
     embed: bool,
-    deterministic: bool,
     reclassify: bool,
     escalation_model: str | None,
     bucket: str | None,
@@ -710,12 +702,12 @@ def classify(
 ) -> None:
     """Turn stored messages into an evidence-linked record.
 
-    The deterministic pre-filter runs before any model call, so on a cloud
+    The metadata pre-filter runs before any model call, so on a cloud
     model the `filtered out` count is the number of messages that did *not*
-    leave your machine (I4). Messages it can resolve outright — POSITIVE
-    (ATS-domain, unconditionally job-related) or NEGATIVE (bank/bulk/social
-    with no hiring vocabulary at all) — never reach a model either way;
-    only UNDECIDED does.
+    leave your machine (I4). Messages a learned rule or a resolved thread
+    settles never reach a model either; only the genuinely undecided
+    residue does — and every confident answer teaches a rule that shrinks
+    that residue for the next run (see `jobd.domain.learning`).
     """
     from jobd.services import ClassifyResult, classify_pending
     from jobd.services.classify import mirror_classify
@@ -732,17 +724,13 @@ def classify(
         if not 0 <= slice_of[0] < slice_of[1]:
             raise click.UsageError("--partition k must be in [0, N).")
     provider = _llm(model)
-    # No separate call is a rule-based model already: it would just be a
-    # second instance of the same thing, counted oddly. See classify_pending's
-    # docstring on what this parameter is actually for.
-    det_provider = _llm("rulebased") if deterministic and model != "rulebased" else None
     esc_provider = _llm(escalation_model) if escalation_model else None
     totals = ClassifyResult()
 
     from jobd.adapters.llm.credits import CreditGuard, CreditsLow
 
     guard = CreditGuard()
-    if model.startswith("openrouter/"):
+    if provider.name.startswith("openrouter/"):
         # Fail before burning anything — a 402 halfway through a mailbox is
         # half a run's spend for nothing (live-caught on the first audit).
         try:
@@ -755,7 +743,7 @@ def classify(
         if reclassify:
             total_cleared = 0
             while True:
-                n = repos.messages.clear_classification(limit=2000)
+                n = repos.messages.clear_classification(limit=2000, partition=slice_of)
                 conn.commit()
                 total_cleared += n
                 if run_all and n:
@@ -789,7 +777,6 @@ def classify(
                 batch = classify_pending(
                     storage=storage,
                     llm=provider,
-                    deterministic=det_provider,
                     escalation_llm=esc_provider,
                     repos=repos,
                     conn=conn,
@@ -821,7 +808,6 @@ def classify(
                         f"...{totals.seen} seen"
                         f" | {totals.filtered_out} negative"
                         f" | {totals.carried_forward} thread-carry(free)"
-                        f" | {totals.deterministic_calls} positive(free)"
                         f" | {totals.llm_calls} model"
                         f" | {totals.escalated} escalated"
                         f" | {totals.recorded} recorded"
@@ -843,9 +829,6 @@ def classify(
     click.echo(
         f"  thread-carry   {totals.carried_forward}   (positive — same thread, free)"
     )
-    click.echo(
-        f"  deterministic  {totals.deterministic_calls}   (positive — rule-based, free)"
-    )
     click.echo(f"  model calls    {totals.llm_calls}   (undecided)")
     if esc_provider is not None:
         click.echo(
@@ -858,7 +841,20 @@ def classify(
     click.echo(f"  applications   +{totals.applications_created}")
     click.echo(f"  stage events   +{totals.stage_events}")
     click.echo(
-        f"  rules learned  +{totals.rules_learned}   (auto, undecided — see `rank`)"
+        f"  rules learned  +{totals.rules_learned}   (auto — see `rank`)"
+    )
+    click.echo(
+        f"  rules demoted  +{totals.rules_demoted}   (exploration found them wrong)"
+    )
+    click.echo(
+        f"  explored       {totals.explored}   (negatives re-checked via the model)"
+    )
+    if esc_provider is not None:
+        click.echo(
+            f"  terminal-routed{totals.terminal_routed:>3}   (offer/rejection -> strong model)"
+        )
+    click.echo(
+        f"  stage conflicts{totals.stage_conflicts:>3}   (non-terminal after terminal, skipped)"
     )
     click.echo(
         f"  thread-reuse   {totals.thread_llm_reused}   (free — thread already read)"
@@ -873,8 +869,8 @@ def classify(
     default=None,
     envvar="JOBD_MODEL",
     help="LiteLLM id whose .embed() to call. Defaults to JOBD_MODEL, then "
-    "JOBD_CHAT_MODEL. rulebased/ollama providers without a real embedder "
-    "raise clearly rather than writing zero vectors — see rulebased.py.",
+    "JOBD_CHAT_MODEL. Providers without a real embedder raise clearly "
+    "rather than writing zero vectors.",
 )
 @click.option("--limit", default=2000, show_default=True, help="Messages per call.")
 @click.option(
@@ -1029,8 +1025,11 @@ def review_list(limit: int) -> None:
         return
     for item in items:
         extraction = item["extraction"]
+        fanout = item.get("fanout", 0)
         click.echo(
-            f"{item['id']}  label={extraction.get('label')}  {item['reason']}\n"
+            f"{item['id']}  label={extraction.get('label')}  {item['reason']}"
+            + (f"  [{fanout} unresolved]" if fanout else "")
+            + "\n"
             f"    company={extraction.get('company_name')!r}"
             f" role={extraction.get('role_title')!r}"
             f" stage={extraction.get('stage')!r}"
@@ -1155,8 +1154,11 @@ def demo(ctx: click.Context, local_store: Path) -> None:
 
     One believable search (offers, rejections, a ghosting, an agency, bulk
     noise) is ingested through the real pipeline into a filesystem raw
-    store, then classified with the free rule-based extractor. Safe on a
-    fresh database; refuses one that already holds the demo account.
+    store, then classified with the configured model (JOBD_MODEL or the
+    default — needs its API key, e.g. OPENROUTER_API_KEY; the old keyless
+    rule-based tier was removed when classification rules went dynamic).
+    Safe on a fresh database; refuses one that already holds the demo
+    account.
     """
     from jobd.services.demo import DEMO_ACCOUNT, seed_demo
 
@@ -1181,11 +1183,10 @@ def demo(ctx: click.Context, local_store: Path) -> None:
     )
     ctx.invoke(
         classify,
-        model="rulebased",
+        model="default",
         limit=1000,
         run_all=True,
         embed=False,
-        deterministic=True,
         reclassify=False,
         escalation_model=None,
         bucket=None,
@@ -1226,14 +1227,40 @@ def companies() -> None:
         )
 
 
+@main.command("dedupe")
+@click.option("--limit", default=50, show_default=True, help="Candidate pairs to show.")
+def dedupe(limit: int) -> None:
+    """Propose duplicate companies for a human to join — never applies them.
+
+    Entity resolution biases toward *split*, and this is the tool that pays
+    that debt back: it ranks pairs whose name/domain make them plausibly the
+    same employer. Confirm one with `jobd learn` (or the teach form) — adding
+    the alias a human reads is the merge; nothing here writes on its own.
+    """
+    from jobd.services.dedupe import suggest_merges
+
+    with _connect() as conn:
+        companies_ = _repos(conn).companies.all()
+        candidates = suggest_merges(companies_, limit=limit)
+    if not candidates:
+        click.echo("No likely duplicates found.")
+        return
+    for c in candidates:
+        click.echo(
+            f"{c.score:.2f}  {c.left_name!r}  <->  {c.right_name!r}  [{c.reason}]"
+        )
+
+
+
 @main.command("verify")
 @click.option(
     "--model",
-    required=True,
+    default="default",
+    show_default=True,
     envvar="JOBD_MODEL",
-    help="A real model id — e.g. openrouter/anthropic/claude-3.5-haiku, or "
-    "any other LiteLLM id. `rulebased` can't answer this (no prompt "
-    "reading), so it is refused rather than silently wasted.",
+    help="A model id — e.g. openrouter/anthropic/claude-3.5-haiku, or any "
+    "other LiteLLM id. 'default' resolves JOBD_MODEL, then the built-in "
+    "default.",
 )
 @click.option(
     "--limit", default=20, show_default=True, help="Companies to audit this run."
@@ -1284,11 +1311,6 @@ def verify(
     company, not per message; findings are stored in `company_verification`
     even without --apply, and a company page shows its most recent pass.
     """
-    if model == "rulebased":
-        raise click.ClickException(
-            "verify needs a real model — rulebased has no prompt to read. "
-            "Pass --model openrouter/<id> or another LiteLLM id."
-        )
     from jobd.services import timeline as build_timeline
     from jobd.services.verify import VerifyOutcome, verify_companies
 
@@ -1433,10 +1455,11 @@ def logos(limit: int, refresh: bool, workers: int) -> None:
 @click.option(
     "--model",
     envvar="JOBD_MODEL",
-    default="rulebased",
+    default="default",
     show_default=True,
-    help="Extractor for messages the deterministic path can't settle. "
-    "'rulebased' runs fully offline.",
+    help="Extractor for messages the free tiers can't settle. 'default' "
+    "resolves JOBD_MODEL, then the built-in default; ollama/<model> runs "
+    "fully local.",
 )
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket for raw messages.")
 @click.option(
@@ -1525,9 +1548,11 @@ def scrape(
 @click.option(
     "--model",
     envvar="JOBD_MODEL",
-    required=True,
-    help="A real model id (e.g. openrouter/google/gemini-2.5-flash-lite) — "
-    "the audit is the model's judgment; rulebased has none to offer.",
+    default="default",
+    show_default=True,
+    help="A model id (e.g. openrouter/google/gemini-2.5-flash-lite) — "
+    "the audit is the model's judgment. 'default' resolves JOBD_MODEL, "
+    "then the built-in default.",
 )
 @click.option("--company", "company_name", default=None, help="Limit to one company.")
 @click.option(
@@ -1560,11 +1585,8 @@ def audit(
     applications, teach corrective sender rules. See scrape/audit.py for the
     live cases this repairs (package-delivery mail recorded as job mail, a
     post-acceptance engagement split into two applications)."""
-    from jobd.scrape.audit import run_audit
-
-    if model == "rulebased":
-        raise click.ClickException("audit needs a real model — see --model help.")
     from jobd.adapters.llm.credits import CreditGuard, CreditsLow
+    from jobd.scrape.audit import run_audit
 
     credit_guard = CreditGuard()
     if model.startswith("openrouter/"):
@@ -1799,7 +1821,7 @@ def serve(host: str, port: int) -> None:
 @click.option(
     "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
 )
-@click.option("--model", default="rulebased", show_default=True, envvar="JOBD_MODEL")
+@click.option("--model", default="default", show_default=True, envvar="JOBD_MODEL")
 @click.option("--classify/--no-classify", default=True, show_default=True)
 @click.confirmation_option(
     prompt="This drops the derived record and rebuilds it from raw. Continue?"

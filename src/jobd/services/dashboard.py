@@ -2244,11 +2244,19 @@ def pending_reviews(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """The review queue, newest first, with the evidence message's subject.
+    """The review queue, impact-ranked, with the evidence message's subject.
 
     `reason` groups the queue by *why* the extractor was unsure. 1,394 of the
     1,716 open items share one reason string, which is what makes deciding a
     whole bucket at once the realistic action rather than a shortcut.
+
+    Ordered by expected information gain (algorithm-improvements.md #2), not
+    arrival: a pending item whose sender domain also appears in N other
+    unresolved messages is worth more than a one-off, and a domain that
+    already carries an `undecided` rule is a promotion candidate (resolving it
+    either unlocks the zero-cost carry path or surfaces a conflict). `impact`
+    is that score, surfaced so the triage page can show *why* an item is at
+    the top.
     """
     clauses = ["rq.status = 'pending'"]
     params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -2258,11 +2266,29 @@ def pending_reviews(
     rows = conn.execute(
         f"""
         SELECT rq.id, rq.message_id, rq.extraction, rq.confidence, rq.reason,
-               rq.extracted_by, rq.created_at, m.subject, m.sent_at, m.direction
+               rq.extracted_by, rq.created_at, m.subject, m.sent_at, m.direction,
+               (SELECT count(*) FROM message m2
+                 WHERE m2.sender_domain = m.sender_domain
+                   AND m2.sender_domain IS NOT NULL
+                   AND m2.company_id IS NULL
+                   AND m2.classified_by IS NULL) AS sibling_count,
+               EXISTS (SELECT 1 FROM sender_rule sr
+                 WHERE sr.match_type = 'domain'
+                   AND lower(sr.value) = lower(m.sender_domain)
+                   AND sr.verdict = 'undecided') AS has_undecided_rule
         FROM review_queue rq
         JOIN message m ON m.id = rq.message_id
         WHERE {' AND '.join(clauses)}
-        ORDER BY rq.created_at DESC
+        ORDER BY (SELECT count(*) FROM message m2
+                   WHERE m2.sender_domain = m.sender_domain
+                     AND m2.sender_domain IS NOT NULL
+                     AND m2.company_id IS NULL
+                     AND m2.classified_by IS NULL)
+                 * (CASE WHEN EXISTS (SELECT 1 FROM sender_rule sr
+                          WHERE sr.match_type = 'domain'
+                            AND lower(sr.value) = lower(m.sender_domain)
+                            AND sr.verdict = 'undecided') THEN 2 ELSE 1 END)
+                 DESC, rq.created_at DESC
         LIMIT %(limit)s OFFSET %(offset)s
         """,
         params,
@@ -2279,6 +2305,9 @@ def pending_reviews(
             "subject": r[7],
             "sent_at": r[8],
             "direction": r[9],
+            "sibling_count": int(r[10] or 0),
+            "has_undecided_rule": bool(r[11]),
+            "impact": int(r[10] or 0) * (2 if r[11] else 1),
         }
         for r in rows
     ]

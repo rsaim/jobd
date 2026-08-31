@@ -101,7 +101,7 @@ def mailbox_facts(
     free = int(
         sum(
             counters.get(k, 0)
-            for k in ("filtered_out", "deterministic_calls", "carried_forward")
+            for k in ("filtered_out", "carried_forward")
         )
     )
     if free and fetched:

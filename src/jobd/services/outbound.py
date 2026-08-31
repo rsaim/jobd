@@ -187,22 +187,43 @@ def approve_and_send(
         approved_by=approved_by,
         approved_at_iso=approved_at.isoformat(),
     )
+
+    # Atomically claim the draft for sending: UPDATE only succeeds if status is
+    # still 'draft'. If another process sent it between our check and this
+    # statement, rowcount will be 0 and we bail before the send call (the race
+    # condition this fixes — two processes checking "sent?" then both calling
+    # send() because neither has updated the row yet).
+    claim = conn.execute(
+        """
+        UPDATE outbound_message
+        SET status = 'sending', approved_by = %(by)s, approved_at = %(at)s
+        WHERE id = %(id)s AND status = 'draft'
+        RETURNING draft_id
+        """,
+        {"by": approved_by, "at": approved_at, "id": outbound_id},
+    )
+    if claim.rowcount == 0:
+        # Already sent (or never existed). Re-read to raise the right error.
+        fresh = conn.execute(
+            f"SELECT {_COLS} FROM outbound_message WHERE id = %(id)s",
+            {"id": outbound_id},
+        ).fetchone()
+        if fresh and _row(fresh).status == "sent":
+            raise OutboundError("Already sent — refusing to send twice.")
+        raise OutboundError(f"Outbound {outbound_id} not found or not a draft.")
+
+    # Now send the actual message. If this fails the row stays at status='sending',
+    # which is fine — that's evidence of the partial state and a manual cleanup path.
     sent_message_id = sender.send(row.account, row.draft_id, approval)
 
     record = conn.execute(
         f"""
         UPDATE outbound_message
-        SET status = 'sent', approved_by = %(by)s, approved_at = %(at)s,
-            sent_message_id = %(sent_id)s
+        SET status = 'sent', sent_message_id = %(sent_id)s
         WHERE id = %(id)s
         RETURNING {_COLS}
         """,
-        {
-            "by": approved_by,
-            "at": approved_at,
-            "sent_id": sent_message_id,
-            "id": outbound_id,
-        },
+        {"sent_id": sent_message_id, "id": outbound_id},
     ).fetchone()
     conn.commit()
     assert record is not None

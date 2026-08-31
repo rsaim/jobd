@@ -58,6 +58,7 @@ from jobd.domain.extraction import (
 )
 from jobd.domain.raw import RawMessage
 from jobd.domain.record import (
+    TERMINAL_STAGES,
     Application,
     Company,
     CompanyAlias,
@@ -149,6 +150,7 @@ class MessageCompanyStore(Protocol):
 
 class StageStore(Protocol):
     def add(self, event: StageEvent) -> StageEvent: ...
+    def latest_terminal(self, application_id: UUID) -> datetime | None: ...
 
 
 class ReviewStore(Protocol):
@@ -220,6 +222,23 @@ class ClassifyResult:
     #: call. See `_record`'s docstring for why it teaches `undecided`, not
     #: `positive`.
     rules_learned: int = 0
+    #: Negative rules demoted to `undecided` this run — exploration budget
+    #: (algorithm-improvements.md #3) routed a message a negative rule would
+    #: have dropped through the model, the model said positive, and the rule
+    #: was wrong.
+    rules_demoted: int = 0
+    #: Messages a learned NEGATIVE rule would have dropped that were instead
+    #: routed through the model to re-check the rule still holds.
+    explored: int = 0
+    #: Messages that looked terminal (offer/rejection/onboarding in the
+    #: subject or body) and were routed straight to the escalation model
+    #: rather than the cheap extractor (algorithm-improvements.md #7).
+    terminal_routed: int = 0
+    #: Stage events skipped because they contradicted an already-closed
+    #: application timeline (a non-terminal stage after a terminal one) —
+    #: the message still resolves to the company, the claim just isn't
+    #: asserted (algorithm-improvements.md #5).
+    stage_conflicts: int = 0
     #: Messages resolved from a thread's already-stored model reading — the
     #: one-call-per-thread cache (`thread_extraction`) answering instead of
     #: a second paid call on a conversation the model has already read.
@@ -304,6 +323,13 @@ def classify_pending(
     # visible to the rest of *this* batch immediately (unlike `rules` above,
     # which is a snapshot); the next batch reloads `rules` fresh regardless.
     known = learning.known_verdicts(rules)
+    # The parallel company index for the promotion guard (algorithm-
+    # improvements.md #1): a domain→positive promotion must verify the two
+    # confident extractions resolved to the same entity. Same lifecycle as
+    # `known` — seeded from the loaded rules, grown in place as `_record`
+    # teaches an `undecided` rule so a second message in the same batch can
+    # promote against it.
+    known_company = learning.known_companies(rules)
     messages = repos.messages.unclassified(limit, partition=partition)
     raws = _prefetch(storage, messages, fetch_workers)
 
@@ -355,6 +381,7 @@ def classify_pending(
                     repos=repos,
                     rules=rules,
                     known=known,
+                    known_company=known_company,
                     embed=embed,
                     out=result,
                     escalation_llm=escalation_llm,
@@ -393,6 +420,10 @@ def mirror_classify(meter: Any, result: ClassifyResult) -> None:
         ("recorded", result.recorded),
         ("companies_created", result.companies_created),
         ("rules_learned", result.rules_learned),
+        ("rules_demoted", result.rules_demoted),
+        ("explored", result.explored),
+        ("terminal_routed", result.terminal_routed),
+        ("stage_conflicts", result.stage_conflicts),
         ("thread_llm_reused", result.thread_llm_reused),
     ):
         meter.set_counter(key, value)
@@ -542,6 +573,7 @@ def _one(
     repos: Repositories,
     rules: list[SenderRule],
     known: dict[str, str],
+    known_company: dict[str, object],
     embed: bool,
     out: ClassifyResult,
     escalation_llm: LLMProvider | None = None,
@@ -572,8 +604,8 @@ def _one(
         if parent_ref and hasattr(repos.messages, "rfc_parent_context"):
             thread_ctx = repos.messages.rfc_parent_context(parent_ref)
     known_contact = _known_contact(sender, recipients, message.account, repos)
-    learned, learned_company_id, learned_category, learned_domain = _match_rule(
-        rules, sender, recipients
+    learned, learned_company_id, learned_category, learned_domain, learned_rule = (
+        _match_rule(rules, sender, recipients)
     )
     # The sender matched a RECRUITING_AGENCY-tagged rule: whatever company
     # this message resolves to, that domain is the agency, not the employer
@@ -599,25 +631,31 @@ def _one(
     # Algorithm improvement #3: exploration budget for negative rules.
     # A small fraction (2%) of messages a negative *learned rule* would drop
     # are routed through the model anyway — if they come back positive, the
-    # rule is demoted for human review. This prevents the "silently hide real
-    # mail forever" failure mode when domains get re-purposed.
-    explore_decision = None
-    if verdict.status == "negative" and learned == "negative":
-        # This negative verdict came from a learned rule (not Gmail labels
-        # or bulk headers) — candidate for exploration. Determine match type
-        # from what we know: if learned_domain is not None, it was a domain
-        # rule; otherwise check if sender matches an address rule.
-        match_type = "domain" if learned_domain is not None else "address"
-        match_value = learned_domain if learned_domain else sender.lower().strip().strip("<>")
-        explore_decision = exploration.should_explore_negative(match_type, match_value)
-
-    if verdict.status == "negative" and (explore_decision is None or not explore_decision.explore):
-        # Apply the negative verdict: either not from a learned rule, or
-        # exploration decided not to sample this one (98% of the time).
+    # rule is demoted to `undecided` for re-checking. This prevents the
+    # "silently hide real mail forever" failure mode when domains get
+    # re-purposed. Deterministic per (rule, message) — a hash, not a coin
+    # flip — so re-deriving the record (I3) reproduces the same exploration.
+    explored = False
+    if verdict.status == "negative" and learned == "negative" and learned_rule is not None:
+        explore_decision = exploration.should_explore_negative(
+            learned_rule.match_type, learned_rule.value, message.id
+        )
+        if explore_decision.explore:
+            explored = True
+            out.explored += 1
+            # Fall through to the model instead of dropping: the model is
+            # about to be the first reader of this content since the rule was
+            # taught.
+        else:
+            out.filtered_out += 1
+            repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
+            return
+    elif verdict.status == "negative":
+        # Negative from Gmail labels / bulk headers, not a learned rule —
+        # nothing to re-examine, drop as always.
         out.filtered_out += 1
         repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
         return
-    # If explore_decision.explore is True, fall through to model classification
 
     # Zero-cost path: some other message in this exact conversation chain, or
     # a human-confirmed rule about this sender's domain/address, already
@@ -659,6 +697,18 @@ def _one(
     extractor = llm
     out.llm_calls += 1
 
+    # Algorithm improvement #7: cost-aware routing. A message that looks
+    # terminal — an offer, rejection, or onboarding thread — is the
+    # highest-stakes kind of row: a wrong label on it is the most visible
+    # error the record can make. Route those straight to the escalation model
+    # when one is configured, and let the cheap model keep the long tail. The
+    # heuristic errs toward spending the strong model: a false "terminal"
+    # match costs a few extra tokens on a non-terminal message, never a wrong
+    # record.
+    if escalation_llm is not None and _looks_terminal(message.subject, text):
+        extractor = escalation_llm
+        out.terminal_routed += 1
+
     prompt = PROMPT
     rules_context = ""
     if verdict.status == "undecided":
@@ -670,6 +720,15 @@ def _one(
         rules_context = learned_rules_context(section)
         if rules_context:
             prompt = rules_context + "\n" + prompt
+        # Algorithm improvement #4: retrieval-augmented few-shot. For the
+        # messages the free tiers couldn't settle, retrieve the most-similar
+        # *already-resolved* messages by embedding and show them as concrete
+        # analogies — this is where the free tier's punt rate lives, and
+        # where a real example beats a general rule. Degrades to nothing when
+        # embeddings were never computed or the provider can't embed.
+        similar = _similar_examples_context(llm, repos, text, k=3)
+        if similar:
+            prompt = similar + "\n" + prompt
 
     # Built once, reused for the escalation call below too — same message,
     # same rendering, only the model changes.
@@ -732,8 +791,11 @@ def _one(
     # genuinely unsure — this is the expensive path, spent only on the
     # messages that need it. A model that punts twice stays punted; this
     # is a second read, not a tiebreak vote, so its answer (including a
-    # second "unclassified") replaces the first one outright.
-    if ambiguous and escalation_llm is not None:
+    # second "unclassified") replaces the first one outright. `extractor is
+    # llm` guards the terminal-routing case (algorithm-improvements.md #7):
+    # a message already handed to the strong model has no second opinion left
+    # to buy.
+    if ambiguous and escalation_llm is not None and extractor is llm:
         escalated_payload = escalation_llm.extract(
             prompt, EXTRACTION_SCHEMA, text=rendered
         )
@@ -750,6 +812,26 @@ def _one(
         ambiguous = not extraction.is_positive or not (
             extraction.names_a_company or agency_domain
         )
+
+    # Exploration finding (algorithm-improvements.md #3): this message was
+    # about to be dropped by a negative rule, was instead routed through the
+    # model, and the model did NOT confirm the rule — it read positive. The
+    # rule is stale. Demote it to `undecided` (never to `positive` — that
+    # stays a human's call) so future mail from it reaches the model instead
+    # of being silently hidden. Human rules are left untouched: a
+    # disagreement with a human decision is surfaced, not auto-flipped.
+    if explored and not extraction.is_negative and learned_rule is not None:
+        if learned_rule.source != "human":
+            repos.sender_rules.add(
+                SenderRule(
+                    match_type=learned_rule.match_type,
+                    value=learned_rule.value,
+                    verdict="undecided",
+                    source="auto",
+                )
+            )
+            known[f"{learned_rule.match_type}:{learned_rule.value}"] = "undecided"
+            out.rules_demoted += 1
 
     if ambiguous:
         reason = (
@@ -772,6 +854,7 @@ def _one(
         extraction,
         repos=repos,
         known=known,
+        known_company=known_company,
         agency_domain=agency_domain,
         out=out,
     )
@@ -791,6 +874,7 @@ def _record(
     *,
     repos: Repositories,
     known: dict[str, str],
+    known_company: dict[str, object],
     agency_domain: str | None,
     out: ClassifyResult,
 ) -> None:
@@ -802,11 +886,13 @@ def _record(
     `company_domain` is trusted enough to teach. First sighting teaches
     `undecided` (escapes the bulk-header/label *negative* tier but still
     pays for the model); a second confident extraction agreeing on the same
-    domain promotes the rule to `positive`, unlocking the zero-cost
-    rule-carry path. A human `learn` can still promote or demote at any
-    point — human rules pre-exist in `known`, and the policy never
-    overwrites a standing verdict except the auto `undecided` → `positive`
-    step.
+    domain *and* the same company promotes the rule to `positive`, unlocking
+    the zero-cost rule-carry path. A human `learn` can still promote or
+    demote at any point — human rules pre-exist in `known`, and the policy
+    never overwrites a standing verdict except the auto `undecided` →
+    `positive` step, which additionally refuses to promote an agency domain
+    or a domain that resolved to two different companies (algorithm-
+    improvements.md #1).
     """
     assert message.id is not None
     if extraction.stage in ("offer", "accepted", "declined") and (
@@ -840,7 +926,13 @@ def _record(
     raw_domain = extraction.company_domain
     domain = normalise_domain(raw_domain) if raw_domain else None
     teach = (
-        learning.on_confident_positive(company_domain=domain, known=known)
+        learning.on_confident_positive(
+            company_domain=domain,
+            company_key=company.id,
+            company_kind=company.kind,
+            known=known,
+            known_company=known_company,
+        )
         if domain
         else None
     )
@@ -852,6 +944,10 @@ def _record(
             )
         )
         known[f"{teach.match_type}:{teach.value}"] = teach.verdict
+        if teach.match_type == "domain" and not teach.promotion:
+            # First sighting: pin the company so a second message from this
+            # domain can be promoted against it (algorithm-improvements.md #1).
+            known_company[f"domain:{teach.value}"] = company.id
         out.rules_learned += 1
         if not teach.promotion:
             _journal_entry(
@@ -895,11 +991,28 @@ def _record(
     if extraction.stage and application is not None and application.id is not None:
         # Evidence-linked by construction: the message being classified *is* the
         # evidence, so there is no path here that records a claim without one.
+        occurred_at = extraction.occurred_at or message.sent_at
+        # Stage monotonicity (algorithm-improvements.md #5): a non-terminal
+        # stage event on or after a terminal one is a contradiction — the
+        # process already ended, so an "onsite" arriving after a "rejected"
+        # (out-of-order ingestion, a re-surfaced old thread) must not render
+        # as a backwards timeline. The message still resolves to the company
+        # (evidence preserved via the link above); only the wrong claim is
+        # not asserted. Terminal-after-terminal is allowed — COALESCE in
+        # `applications.close` already keeps the first ending authoritative.
+        ended_after = (
+            repos.stages.latest_terminal(application.id)
+            if extraction.stage not in TERMINAL_STAGES
+            else None
+        )
+        if ended_after is not None and occurred_at >= ended_after:
+            out.stage_conflicts += 1
+            return
         repos.stages.add(
             StageEvent(
                 application_id=application.id,
                 stage=extraction.stage,
-                occurred_at=extraction.occurred_at or message.sent_at,
+                occurred_at=occurred_at,
                 evidence_message_id=message.id,
                 # No numeric confidence to carry any more (label-based
                 # routing) — defaults to None, same nullable column
@@ -910,7 +1023,7 @@ def _record(
         out.stage_events += 1
 
         if extraction.stage in {"rejected", "withdrawn", "accepted", "declined"}:
-            ended_at = extraction.occurred_at or message.sent_at
+            ended_at = occurred_at
             # `pick_application`'s window has a grace period before
             # `started_at` (see resolve.py's `ApplicationWindow.contains`),
             # so a message can legitimately match an application it
@@ -1285,7 +1398,9 @@ def _teach_negative(
 
 def _match_rule(
     rules: list[SenderRule], sender: str, recipients: str
-) -> tuple[prefilter.LearnedVerdict | None, UUID | None, str | None, str | None]:
+) -> tuple[
+    prefilter.LearnedVerdict | None, UUID | None, str | None, str | None, SenderRule | None
+]:
     """The fanout lookup: does any learned rule cover this sender or any
     recipient? Checked by address first (the more specific match), then
     domain — an address-level correction ("this one person, not the whole
@@ -1296,10 +1411,13 @@ def _match_rule(
     different subdomain per campaign, and an exact-match rule would need
     re-teaching for every one of them.
 
-    Returns ``(verdict, company_id, category, matched_domain)``. The 4th
-    element is the matched rule's own domain value (lowercased) when the
+    Returns ``(verdict, company_id, category, matched_domain, rule)``. The
+    4th element is the matched rule's own domain value (lowercased) when the
     match was a domain rule, else `None` — `_one`'s RECRUITING_AGENCY
-    handling needs to know *which* domain matched, not just that one did.
+    handling needs to know *which* domain matched, not just that one did. The
+    5th is the matched rule itself — the exploration path needs its
+    `match_type`/`value`/`source` to demote a rule that exploration proved
+    wrong (algorithm-improvements.md #3).
     """
     from email.utils import getaddresses
 
@@ -1314,7 +1432,7 @@ def _match_rule(
     for address in addresses:
         rule = by_address.get(address)
         if rule:
-            return rule.verdict, rule.company_id, rule.category, None
+            return rule.verdict, rule.company_id, rule.category, None, rule
     for domain in domains:
         rule = next(
             (
@@ -1325,8 +1443,8 @@ def _match_rule(
             None,
         )
         if rule:
-            return rule.verdict, rule.company_id, rule.category, rule.value.lower()
-    return None, None, None, None
+            return rule.verdict, rule.company_id, rule.category, rule.value.lower(), rule
+    return None, None, None, None, None
 
 
 def _header(payload: bytes, name: str) -> str:
@@ -1347,6 +1465,76 @@ def _is_bulk(payload: bytes) -> bool:
     if _header(payload, "list-unsubscribe"):
         return True
     return _header(payload, "precedence").strip().lower() in {"bulk", "list"}
+
+
+#: Subject/body phrases that mark a message as terminal — an offer, a
+#: rejection, or post-acceptance logistics. Used only for *routing*
+#: (algorithm-improvements.md #7): a terminal-looking message gets the strong
+#: model. A false match spends a few extra tokens; it never changes a verdict,
+#: so the list biases toward recall over precision.
+_TERMINAL_TERMS = (
+    "offer letter",
+    "job offer",
+    "we are pleased to offer",
+    "welcome to ",
+    "rejection",
+    "we regret",
+    "unfortunately",
+    "background check",
+    "onboarding",
+    "i-9",
+    "w-4",
+    "h-1b",
+    "benefits enrollment",
+    "start date",
+    "congratulations",
+)
+
+
+def _looks_terminal(subject: str | None, text: str) -> bool:
+    haystack = f"{subject or ''} {text or ''}".lower()
+    return any(term in haystack for term in _TERMINAL_TERMS)
+
+
+def _similar_examples_context(
+    llm: LLMProvider, repos: Repositories, text: str, *, k: int = 3
+) -> str:
+    """Retrieval-augmented few-shot for uncertain messages (algorithm-
+    improvements.md #4): embed the message, find the k most-similar
+    already-resolved messages, and render them as concrete analogies for the
+    extractor. Empty string when embeddings were never computed, the provider
+    can't embed, or nothing is close enough — a few-shot miss must never fail
+    the message it was meant to help."""
+    if k <= 0 or not text or not text.strip():
+        return ""
+    messages = repos.messages
+    has_embeddings = getattr(messages, "has_embeddings", None)
+    similar = getattr(messages, "similar_resolved", None)
+    if has_embeddings is None or similar is None:
+        return ""
+    try:
+        if not has_embeddings():
+            return ""
+        vector = llm.embed([text[:2000]])[0]
+        rows = similar(vector, limit=k)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    lines = ["Resolved examples most similar to this message:"]
+    for row in rows:
+        subject = (row.get("subject") or "").strip()[:80]
+        company = row.get("company") or "?"
+        lines.append(f"- {company} | {subject}")
+    return "\n".join(lines)
+
+
+def _is_hardcoded_domain(domain: str) -> bool:
+    """A domain the rule engine must never touch — the ATS/scheduler/agency
+    tiers in `resolve.GENERIC_DOMAINS`. `distill.py` consults this when
+    compiling judgments into rules, so a distilled verdict never lands on
+    infrastructure mail (real candidacies flow through those domains)."""
+    return is_generic_domain(domain)
 
 
 @dataclass
@@ -1416,12 +1604,19 @@ def sweep_review_queue(
     out = SweepResult()
     rules = repos.sender_rules.all()
     known = learning.known_verdicts(rules)
+    known_company = learning.known_companies(rules)
     inner = ClassifyResult()
 
     # Algorithm improvement #2: impact-ranked review queue (active learning).
     # Rank by expected information gain — the decision that clears the most
     # residue appears first — rather than FIFO (created_at).
     ranked = active_learning.rank_queue_items(conn, limit=limit)
+    if not ranked:
+        # Empty queue — nothing to judge. The early return also sidesteps
+        # psycopg adapting an empty list to `ANY(...)`, which would need a
+        # type hint for no benefit.
+        meter.flush(force=True)
+        return out
     ranked_ids = {r.message_id for r in ranked}
 
     rows = conn.execute(
@@ -1454,7 +1649,7 @@ def sweep_review_queue(
         sender = message.sender_address or ""
         text = (message.body_text or "")[:6000]
 
-        learned, _, learned_category, learned_domain = _match_rule(
+        learned, _, learned_category, learned_domain, _ = _match_rule(
             rules, sender, ""
         )
         agency_domain = (
@@ -1691,6 +1886,7 @@ def sweep_review_queue(
                         extraction,
                         repos=repos,
                         known=known,
+                        known_company=known_company,
                         agency_domain=agency_domain,
                         out=inner,
                     )

@@ -250,7 +250,8 @@ def distill_rules(
             if apply:
                 conn.execute(
                     "INSERT INTO sender_rule (match_type, value, verdict, source)"
-                    " VALUES ('domain', %s, %s, 'distilled')",
+                    " VALUES ('domain', %s, %s, 'distilled')"
+                    " ON CONFLICT (match_type, lower(value)) DO NOTHING",
                     (domain, verdict),
                 )
         if apply:

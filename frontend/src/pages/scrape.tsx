@@ -186,12 +186,11 @@ export function ScrapePage() {
   const begin = async () => {
     setStarting(true)
     try {
-      // Always the free deterministic extractor here: what it can't settle
-      // goes to the review queue, and the loop's sweep step is the LLM's
-      // turn. Model choice stays a CLI concern.
+      // "default" resolves the server's JOBD_MODEL, then the built-in
+      // default. Model choice stays a server/CLI concern.
       const result = await startScrape({
         window_days: window_ === "full" ? null : Number(window_),
-        model: "rulebased",
+        model: "default",
       })
       if (result.ok) {
         setStartError(null)

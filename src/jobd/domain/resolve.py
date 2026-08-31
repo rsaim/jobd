@@ -17,6 +17,66 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+#: Shared mailbox providers and intermediary infrastructure — personal
+#: webmail, LinkedIn, ATS/scheduling hosts, recruiting agencies. Moved here
+#: from `prefilter` when the hardcoded *verdict* lists were removed: this is
+#: not a classification rule (nothing here decides job-related or not), it is
+#: an identity guard for entity resolution and search planning. Three jobs:
+#:
+#: 1. A company must never be *inferred* from one of these domains — a
+#:    recruiter replying from `@gmail.com` does not work for "Gmail"
+#:    (live-caught: 13 real employers folded into one bogus "Gmail" company).
+#: 2. The auto-teach policy (`jobd.domain.learning`) writes *address*-level
+#:    negative rules for these instead of domain-level — one spammer at
+#:    gmail.com must not silence every gmail correspondent.
+#: 3. The scrape expansion loop never turns one into a search query — a
+#:    learned gmail.com entity would pull the whole mailbox.
+GENERIC_DOMAINS: frozenset[str] = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "yahoo.com",
+        "icloud.com",
+        "me.com",
+        "proton.me",
+        "protonmail.com",
+        "fastmail.com",
+        "aol.com",
+        "linkedin.com",
+        "greenhouse.io",
+        "lever.co",
+        "ashbyhq.com",
+        "myworkday.com",
+        # Interview-scheduling platforms AND recruiting agencies
+        # (SenderCategory.INTERVIEW_SCHEDULER / RECRUITING_AGENCY): pure
+        # infrastructure or an intermediary, never the employer itself, so
+        # the domain must never become the inferred company.
+        "goodtime.io",
+        "interviews.modernloop.io",
+        "jkpartner.com",
+        "mavenpartnership.com",
+        "alldus.com",
+        "cpi-search.com",
+        "acaciarecruits.com",
+        "selbyjennings.com",
+        "topfunneltalent.com",
+        "brisktalent.com",
+        "intelletec.com",
+        "emaago.com",
+    }
+)
+
+
+def is_generic_domain(domain: str) -> bool:
+    """Exact or subdomain match against :data:`GENERIC_DOMAINS`."""
+    return any(
+        domain == d or domain.endswith(f".{d}") for d in GENERIC_DOMAINS
+    )
+
+
 #: Corporate suffixes, dropped before comparing names. "Acme, Inc." and "Acme"
 #: are the same company; keeping the suffix would make them two.
 _SUFFIXES = (

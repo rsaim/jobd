@@ -35,10 +35,11 @@ from typing import Any, Literal
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-from jobd.domain.prefilter import ATS_DOMAINS, BANK_DOMAINS, GENERIC_DOMAINS
+from jobd.domain.resolve import GENERIC_DOMAINS
 from jobd.scrape import queries as q
 from jobd.scrape.audit import run_audit
 from jobd.scrape.facts import mailbox_facts, new_company_facts, stage_facts
+from jobd.scrape.queries import ATS_DOMAINS
 from jobd.scrape.state import Entity, Query, RunContext, ScrapeState
 from jobd.services.classify import classify_pending
 from jobd.services.ingest import IngestResult
@@ -61,7 +62,11 @@ def _ctx(config: RunnableConfig) -> RunContext:
 
 
 def _is_excluded_domain(domain: str) -> bool:
-    pool = GENERIC_DOMAINS | BANK_DOMAINS | ATS_DOMAINS
+    # Shared providers would pull the whole mailbox; ATS platforms are
+    # already seed queries, so expanding into one is a duplicate. Banks and
+    # other noise never get here any more: a learned negative rule means
+    # their messages classify negative and never mint an entity.
+    pool = GENERIC_DOMAINS | ATS_DOMAINS
     return any(domain == d or domain.endswith("." + d) for d in pool)
 
 
@@ -208,8 +213,8 @@ def fetch(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
 def classify(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
     """Classify everything unclassified — unchanged v1 machinery, batched.
 
-    Prefilter → thread/rule carry → rule-based extractor → LLM. The scrape
-    changes *what gets fetched*, never how a message is judged.
+    Prefilter → thread/rule carry → LLM. The scrape changes *what gets
+    fetched*, never how a message is judged.
     """
     ctx = _ctx(config)
     counters = dict(state["counters"])
@@ -222,7 +227,8 @@ def classify(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
             repos=ctx.repos,
             conn=ctx.conn,
             limit=CLASSIFY_BATCH,
-            deterministic=ctx.deterministic,
+            escalation_llm=ctx.judge,
+            triage_llm=getattr(ctx, "triage_llm", None),
         )
         if result.seen == 0:
             break
@@ -244,7 +250,8 @@ def classify(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
             break
         for key in (
             "filtered_out",
-            "deterministic_calls",
+            "triaged_out",
+            "triage_calls",
             "carried_forward",
             "llm_calls",
             "not_job_related",
@@ -297,12 +304,8 @@ def audit(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
 
     Runs between classify and harvest on purpose: a junk link cleaned here
     never becomes an entity the expansion loop would have gone querying for.
-    Skipped entirely on the offline extractor — the rule-based provider has
-    no judgment to add to its own output.
     """
     ctx = _ctx(config)
-    if getattr(ctx.llm, "name", "rulebased") == "rulebased":
-        return {}
     touched = ctx.conn.execute(
         "SELECT id FROM company"
         " WHERE created_at >= %(since)s OR last_seen_at >= %(since)s",
@@ -376,17 +379,44 @@ def harvest(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
         (since,),
     ).fetchall()
 
+    # Genuine-interaction gating: only expand threads with ≥1 outbound message.
+    # One-way marketing threads (no user reply) waste Gmail API list calls —
+    # they pull the whole thread but yield nothing new. A thread with user
+    # engagement (sent reply/forward) is a conversation worth expanding.
+    threads_with_outbound = set()
+    if threads:
+        thread_ids = [t[0] for t in threads]
+        # Batch query: check each thread for outbound messages in one round-trip.
+        outbound_rows = ctx.conn.execute(
+            "SELECT DISTINCT thread_id FROM message"
+            " WHERE thread_id = ANY(%s) AND direction = 'outbound'",
+            (thread_ids,),
+        ).fetchall()
+        threads_with_outbound = {row[0] for row in outbound_rows}
+
     frontier: list[Query] = []
     for account in state["accounts"]:
         frontier.extend(q.entity_queries(fresh, account, state.get("window_days")))
+    threads_gated = 0
     for thread_id, account in threads:
         if ("thread", thread_id) not in ctx.seen_entities:
             ctx.seen_entities.add(("thread", thread_id))
+            # Gate: skip threads with no outbound messages (one-way marketing).
+            if thread_id not in threads_with_outbound:
+                threads_gated += 1
+                continue
             frontier.append(
                 Query(q=f"thread:{thread_id}", origin="expand:thread", account=account)
             )
 
     hop = state["hop"] + 1
+    if threads_gated > 0:
+        ctx.emit.emit(
+            "threads_gated",
+            gated=threads_gated,
+            expanded=len(threads) - threads_gated,
+            hop=hop,
+        )
     if hop > MAX_HOPS and frontier:
         ctx.emit.emit("expansion_capped", dropped=len(frontier), hop=hop)
         frontier = []

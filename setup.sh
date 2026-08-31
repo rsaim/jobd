@@ -108,49 +108,6 @@ install_claude() {
   warn "Restart your shell (or 'source ~/.bashrc'/'~/.zshrc'), then run 'claude' to authenticate."
 }
 
-install_aws() {
-  if have aws; then log "AWS CLI already installed ($(aws --version))"; return 0; fi
-  log "Installing AWS CLI v2..."
-  if $IS_MAC; then
-    curl -fsSL "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o /tmp/AWSCLIV2.pkg || return 1
-    sudo installer -pkg /tmp/AWSCLIV2.pkg -target / || return 1
-  elif $IS_LINUX; then
-    local url="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-    [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]] && url="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
-    sudo apt-get install -y -qq unzip || return 1
-    curl -fsSL "$url" -o /tmp/awscliv2.zip || return 1
-    (cd /tmp && unzip -oq awscliv2.zip && sudo ./aws/install --update) || return 1
-  fi
-}
-
-install_terraform() {
-  if have terraform; then log "Terraform already installed ($(terraform --version | head -1))"; return 0; fi
-  log "Installing Terraform..."
-  if $IS_MAC; then
-    require_brew || return 1
-    brew tap hashicorp/tap || return 1
-    brew install hashicorp/tap/terraform || return 1
-  elif $IS_LINUX; then
-    # Note: no software-properties-common here. It exists only to provide
-    # add-apt-repository for PPAs, HashiCorp ships a plain apt repo, and the
-    # package is absent on Debian 13+ — depending on it broke this installer.
-    local codename="${DISTRO_CODENAME:-}"
-    [[ -z "$codename" ]] && have lsb_release && codename="$(lsb_release -cs)"
-    if [[ -z "$codename" ]]; then
-      warn "Could not determine distro codename for the HashiCorp apt repo."
-      return 1
-    fi
-    sudo apt-get update -qq || return 1
-    sudo apt-get install -y -qq gnupg wget curl || return 1
-    wget -qO- https://apt.releases.hashicorp.com/gpg \
-      | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg || return 1
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com ${codename} main" \
-      | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null || return 1
-    sudo apt-get update -qq || return 1
-    sudo apt-get install -y -qq terraform || return 1
-  fi
-}
-
 install_gh() {
   if have gh; then log "GitHub CLI already installed ($(gh --version | head -1))"; return 0; fi
   log "Installing GitHub CLI..."
@@ -223,7 +180,7 @@ activate_venv_on_login() {
 
 install_all() {
   local failed=() step
-  for step in docker python claude aws terraform gh node; do
+  for step in docker python claude gh node; do
     if ! "install_${step}"; then
       warn "FAILED: ${step}"
       failed+=("${step}")
@@ -257,7 +214,7 @@ check() {
   local missing=0 tool
   log "Checking local environment..."
 
-  for tool in docker python3 claude aws terraform gh; do
+  for tool in docker python3 claude gh; do
     if have "$tool"; then
       echo "  [x] $tool"
     else
@@ -304,8 +261,6 @@ case "${1:-}" in
   docker)    install_docker ;;
   python)    install_python ;;
   claude)    install_claude ;;
-  aws)       install_aws ;;
-  terraform) install_terraform ;;
   gh)        install_gh ;;
   node)      install_node ;;
   project)   setup_project ;;
@@ -315,7 +270,7 @@ case "${1:-}" in
     install_all
     ;;
   *)
-    echo "usage: ./setup.sh {check|docker|python|claude|aws|terraform|gh|node|project|all}"
+    echo "usage: ./setup.sh {check|docker|python|claude|gh|node|project|all}"
     exit 1
     ;;
 esac

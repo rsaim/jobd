@@ -19,8 +19,59 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from jobd.domain.prefilter import ATS_DOMAINS, GENERIC_DOMAINS
+from jobd.domain.resolve import GENERIC_DOMAINS
 from jobd.scrape.state import Entity, Query
+
+#: Applicant tracking systems and recruiting platforms — *search seeds*, not
+#: classification rules. This list moved here from the prefilter when the
+#: hardcoded verdict lists were removed: nothing in the classifier consults
+#: it any more (an ATS sender earns its learned rule from its first
+#: confidently-extracted message like everyone else), but as a query pack it
+#: is measured strategy — the seed families below carried the 97%-recall-at-
+#: 20%-fetch result in docs/seed-and-expand.md, and search needs somewhere
+#: to *start*. Change it and re-run the experiments, same as any query.
+ATS_DOMAINS: frozenset[str] = frozenset(
+    {
+        "greenhouse.io",
+        "us.greenhouse-mail.io",
+        "lever.co",
+        "hire.lever.co",
+        "ashbyhq.com",
+        "myworkday.com",
+        "workday.com",
+        "wd1.myworkdayjobs.com",
+        "smartrecruiters.com",
+        "taleo.net",
+        "icims.com",
+        "jobvite.com",
+        "bamboohr.com",
+        "breezy.hr",
+        "workable.com",
+        "workablemail.com",
+        "recruitee.com",
+        "teamtailor.com",
+        "personio.de",
+        "successfactors.com",
+        "brassring.com",
+        "hired.com",
+        "triplebyte.com",
+        "otta.com",
+        "wellfound.com",
+        "angel.co",
+        "dover.com",
+        "gem.com",
+        "rippling.com",
+        "ripplingmail.com",
+        "paylocity.com",
+        "eightfold.ai",
+        "phenompeople.com",
+        "avature.net",
+        "jazzhr.com",
+        "applytojob.com",
+        "polymer.co",
+        "pinpointhq.com",
+    }
+)
 
 #: Measured 0.04% positive rate (12 of 29,169) — safe to exclude everywhere.
 CARVE = "-category:promotions -category:social -category:forums"

@@ -133,4 +133,18 @@ class TokenStore:
         """
         if self._use_keyring or not self._dir.is_dir():
             return []
-        return sorted(p.stem for p in self._dir.glob("*.json"))
+        # Reverse the _path transformation: the first underscore after an alphabetic
+        # prefix (like "gmail") should be restored to a colon
+        keys = []
+        for p in self._dir.glob("*.json"):
+            stem = p.stem
+            # Restore first underscore to colon (e.g., "gmail_user@x.com" → "gmail:user@x.com")
+            if "_" in stem:
+                prefix, rest = stem.split("_", 1)
+                if prefix.isalpha():  # Only restore if prefix is alphabetic (like "gmail")
+                    keys.append(f"{prefix}:{rest}")
+                else:
+                    keys.append(stem)
+            else:
+                keys.append(stem)
+        return sorted(keys)

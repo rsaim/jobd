@@ -78,7 +78,7 @@ def run_scrape(
     *,
     accounts: list[str],
     window_days: int | None = None,
-    model: str = "rulebased",
+    model: str = "default",
     bucket: str | None = None,
     local_store: Path | None = None,
     sink: Any = None,
@@ -93,9 +93,11 @@ def run_scrape(
             mode: every query gets an ``after:`` bound and previously learned
             entities seed the frontier directly. Overlap between runs is free
             — ingest is idempotent, listing skips known ids before fetching.
-        model: Extractor for messages the deterministic path can't settle.
-            ``rulebased`` runs fully offline; anything else goes through
-            LiteLLM (needs its API key in the environment).
+        model: Extractor for messages the free tiers (prefilter, thread and
+            rule carry) can't settle. ``default`` resolves ``JOBD_MODEL``
+            then the built-in default; ``ollama/<model>`` runs fully local;
+            anything else goes through LiteLLM (needs its API key in the
+            environment).
         sink: Optional callable receiving every :class:`Event` — the CLI's
             printer. The dashboard passes ``emitter`` instead and reads it
             from its SSE route.
@@ -109,7 +111,6 @@ def run_scrape(
 
     from jobd.adapters.gmail import GmailSource
     from jobd.adapters.llm import load_provider
-    from jobd.adapters.llm.rulebased import RuleBasedProvider
     from jobd.adapters.postgres import repositories
     from jobd.adapters.secrets import TokenStore
 
@@ -117,13 +118,10 @@ def run_scrape(
     if sink is not None:
         emit.sink = sink
 
-    llm = load_provider(model) if model != "rulebased" else RuleBasedProvider()
-    deterministic = RuleBasedProvider() if model != "rulebased" else None
+    llm = load_provider(model)
     judge_model = os.environ.get("JOBD_JUDGE_MODEL")
     judge = (
-        load_provider(judge_model, max_tokens=8192)
-        if judge_model and model != "rulebased"
-        else None
+        load_provider(judge_model, max_tokens=8192) if judge_model else None
     )
 
     storage = _storage(bucket or os.environ.get("JOBD_BUCKET"), local_store)
@@ -136,7 +134,6 @@ def run_scrape(
             repos=repositories(conn),
             conn=conn,
             llm=llm,
-            deterministic=deterministic,
             judge=judge,
             emit=emit,
         )

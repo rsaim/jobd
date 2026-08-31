@@ -124,7 +124,6 @@ def _accumulate(total: ClassifyResult, batch: ClassifyResult) -> None:
     for name in (
         "seen",
         "filtered_out",
-        "deterministic_calls",
         "carried_forward",
         "llm_calls",
         "escalated",

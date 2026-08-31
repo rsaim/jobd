@@ -51,19 +51,23 @@ def rank_queue_items(
     rows = conn.execute(
         """
         WITH queue_domains AS (
-            -- Every pending review item with its sender domain
+            -- Every pending review item with its sender domain (NULL domain
+            -- folded to '' so an item with no sender_domain is still swept —
+            -- just with zero impact, at the bottom of the ranking, never
+            -- silently dropped from the queue).
             SELECT rq.id AS review_id,
                    rq.message_id,
-                   m.sender_domain,
+                   coalesce(m.sender_domain, '') AS sender_domain,
                    -- Sibling count: how many OTHER unclassified messages
                    -- share this sender domain (including those not in the
                    -- queue yet — a domain with 50 pending/uncertain messages
                    -- is high-value even if only one is queued).
                    (SELECT count(*)
-                    FROM message m2
-                    WHERE m2.sender_domain = m.sender_domain
-                      AND m2.company_id IS NULL
-                      AND m2.classified_by IS NULL
+                     FROM message m2
+                     WHERE m2.sender_domain = m.sender_domain
+                       AND m.sender_domain IS NOT NULL
+                       AND m2.company_id IS NULL
+                       AND m2.classified_by IS NULL
                    ) AS sibling_count,
                    -- Existing undecided rule check: does this domain already
                    -- have an auto-taught undecided rule waiting for promotion?
@@ -76,8 +80,6 @@ def rank_queue_items(
             FROM review_queue rq
             JOIN message m ON m.id = rq.message_id
             WHERE rq.status = 'pending'
-              AND m.sender_domain IS NOT NULL
-              AND m.sender_domain <> ''
         )
         SELECT review_id, message_id, sender_domain, sibling_count,
                has_undecided_rule,

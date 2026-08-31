@@ -11,7 +11,7 @@ can be thrown away and rebuilt (I3).
 flowchart TB
     subgraph outside["Outside world"]
         gmail[Gmail API]
-        s3[(S3 · raw envelopes)]
+        s3[(Storage · raw envelopes<br/>local filesystem or S3)]
         pg[(Postgres · derived)]
         model[LLM · local or cloud]
         keyring[OS keyring]
@@ -85,7 +85,7 @@ sequenceDiagram
     autonumber
     participant G as Gmail
     participant I as ingest_account
-    participant S as Storage (S3)
+    participant S as Storage (local or S3)
     participant P as Postgres
     participant C as classify_pending
     participant M as LLMProvider
@@ -121,11 +121,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    s3[(raw envelopes<br/>immutable, versioned)] -->|derive| pg[(Postgres)]
+    storage[(raw envelopes<br/>immutable, versioned<br/>local or S3)] -->|derive| pg[(Postgres)]
     pg -->|"jobd rebuild"| drop[TRUNCATE derived tables]
-    drop --> s3
+    drop --> storage
 
-    style s3 stroke-width:3px
+    style storage stroke-width:3px
 ```
 
 Every derived table is disposable. A better prompt, a fixed resolver, a new

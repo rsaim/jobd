@@ -14,13 +14,15 @@ in `prefilter.py`:
 * **Positives converge in two steps.** A first confident extraction teaches
   `undecided` — enough to protect the sender from the bulk-header/label
   negative sweep, not enough to skip the model (one message is one datapoint).
-  A second confident extraction from the same domain resolving to the same
+  A second confident extraction from the same domain resolving to the *same*
   company promotes the rule to `positive`, which unlocks classify's zero-cost
   rule-carry path. This two-step earn is what the old ATS list short-circuited
-  by fiat. **CRITICAL FIX (algorithm-improvements.md #1):** Promotion now
-  checks that both extractions resolve to the SAME company_id — preventing
-  entity fusion where recruiting-agency domains or multi-role corporate
-  domains silently fuse two different hiring processes into one timeline.
+  by fiat. Promotion is additionally gated on two conditions that the two-step
+  earn alone would miss (algorithm-improvements.md #1): the two extractions
+  must resolve to the *same entity* (a domain that answered to two different
+  companies never promotes — it would fuse two hiring processes into one
+  timeline), and a recruiting-agency domain never promotes at all (an agency
+  fields many clients by construction).
 * **Negatives teach immediately.** A model "not job-related" verdict writes a
   negative rule on the spot — that sender never costs a model call again.
   This is what `BANK_DOMAINS` used to hardcode for eighteen banks; now any
@@ -47,18 +49,12 @@ from jobd.domain.resolve import is_generic_domain
 class Teach:
     """One rule write the policy decided on. `promotion` marks an
     undecided→positive upgrade rather than a first sighting — callers use it
-    to skip re-journaling a domain they already journaled.
-
-    `company_id` is carried for first sightings (undecided) so the repository
-    can record which company this domain was first associated with — required
-    for the promotion-path entity-fusion fix (algorithm-improvements.md #1).
-    """
+    to skip re-journaling a domain they already journaled."""
 
     match_type: Literal["domain", "address"]
     value: str
     verdict: Literal["positive", "negative", "undecided"]
     promotion: bool = False
-    company_id: str | None = None
 
 
 def _key(match_type: str, value: str) -> str:
@@ -76,18 +72,19 @@ def known_verdicts(
     }
 
 
-def known_companies(
-    rules: list,  # list[SenderRule] — duck-typed to keep this module pure
-) -> dict[str, str | None]:
-    """The in-memory index of domain → company_id for promotion checks.
-    Only domain rules carry company_id; address rules don't (they're specific
-    to one sender on a shared provider, not a whole company domain).
-
-    Built from the same rule set as known_verdicts — same lifecycle."""
+def known_companies(rules: list) -> dict[str, object]:
+    """Rule key → the company a domain rule pins, keyed identically to
+    `known_verdicts`. The promotion check needs it: a domain that resolved to
+    two different companies must not be promoted to `positive`, because
+    rule-carry would then pin every future message from that domain to
+    whichever company happens to sit on the rule row — the "two hiring
+    processes fused into one timeline" failure the pipeline is built to
+    refuse. Address rules carry no company identity here (only domain rules
+    feed the promotion path)."""
     return {
-        r.value.lower(): r.company_id
+        _key(r.match_type, r.value): r.company_id
         for r in rules
-        if r.match_type == "domain" and r.company_id is not None
+        if r.match_type == "domain" and getattr(r, "company_id", None) is not None
     }
 
 
@@ -115,50 +112,45 @@ def covering_verdict(known: Mapping[str, str], address: str) -> str | None:
 def on_confident_positive(
     *,
     company_domain: str,
-    company_id: str | None,
+    company_key: object | None,
     company_kind: str | None,
     known: Mapping[str, str],
-    known_companies: Mapping[str, str | None],
+    known_company: Mapping[str, object] | None,
 ) -> Teach | None:
     """A `label="positive"` extraction earned the record; what does its
     company domain earn?
 
     First sighting → `undecided` (see module docstring). A standing
     auto-taught `undecided` for the same domain → promote to `positive` ONLY
-    if the company_id matches the first sighting's company. Two independent
-    confident extractions resolving to the SAME company is the bar for
-    skipping the model entirely. Any other standing verdict → nothing.
+    if this extraction resolved to the same company as the first sighting
+    (`company_key` vs the pinned `known_company` value). Two independent
+    confident extractions agreeing on the *entity* is the bar for skipping the
+    model entirely. Any other standing verdict → nothing.
 
-    If company_id disagrees or company_kind is "agency", do not promote —
-    the split-bias contract demands we never silently fuse two different
-    companies into one timeline.
+    `company_kind == "agency"` never promotes: an agency domain fields many
+    client employers by construction, and a domain-wide positive rule would
+    fuse them all into one timeline. Same split-bias contract the entity check
+    enforces (algorithm-improvements.md #1).
     """
     domain = company_domain.lower()
     if not domain or is_generic_domain(domain):
         # A shared provider must never be taught as a company's identity —
         # the same guard `_resolve_company` applies before minting a company.
         return None
-    # Agency domains must never be promoted to positive — each client hiring
-    # process is a different company, and a domain-wide positive rule would
-    # fuse them all into one timeline (algorithm-improvements.md #1).
     if company_kind == "agency":
         return None
 
     current = known.get(_key("domain", domain))
     if current is None:
-        # First sighting: teach undecided and record this company_id so future
-        # promotions can verify agreement (algorithm-improvements.md #1).
-        return Teach("domain", domain, "undecided", company_id=company_id)
+        return Teach("domain", domain, "undecided")
     if current == "undecided":
-        # Second sighting: only promote if it resolves to the same company as
-        # the first. Check known_companies mapping (domain → company_id).
-        first_company = known_companies.get(domain)
-        if first_company is not None and first_company == company_id:
-            return Teach("domain", domain, "positive", promotion=True)
-        # Disagreement: the two extractions resolved to different companies.
-        # Do not promote — fall back to message-level classification or an
-        # address-scoped rule (future work: surface as a conflict for human).
-        return None
+        pinned = (known_company or {}).get(_key("domain", domain))
+        if pinned is not None and company_key is not None and pinned != company_key:
+            # The two confident extractions resolved to different companies —
+            # a shared corporate domain or a mis-taught agency. Do not
+            # promote; the split-bias contract refuses to fuse them.
+            return None
+        return Teach("domain", domain, "positive", promotion=True)
     return None
 
 

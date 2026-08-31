@@ -76,9 +76,8 @@ jobd review sweep          # judge model clears what classification punted on
 
 Raw mail is stored write-once and content-addressed. Set ONE of:
 
-- `JOBD_LOCAL_STORE=/path/to/raw` — filesystem store, zero cloud.
-- `JOBD_BUCKET=<s3-bucket>` — S3 store (see `infra/terraform/` for the
-  bucket module; needs AWS credentials in the environment).
+- `JOBD_LOCAL_STORE=/path/to/raw` — filesystem store (local-first default).
+- `JOBD_BUCKET=<s3-bucket>` — S3 store (optional; needs AWS credentials).
 
 ## LLM extraction (optional)
 

@@ -80,11 +80,13 @@ class RunContext:
     repos: Any  # repository bundle
     conn: Any  # psycopg connection
     llm: Any  # extractor LLMProvider
-    deterministic: Any  # rule-based extractor
     #: Application-audit judge — a stronger model than `llm`, or None to
     #: reuse `llm`. See run_audit's docstring for why the tiers split.
     judge: Any
     emit: Any  # events.Emitter
+    #: Batch triage model — cheap flash for label-only 240-char snippet
+    #: prefiltering before full extraction. None to skip triage entirely.
+    triage_llm: Any = None
     #: External ids already in the DB for each account — the skip set that
     #: makes daily re-runs cheap. Loaded once, grown in-memory as we ingest.
     known: dict[str, set[str]] = field(default_factory=dict)
