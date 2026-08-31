@@ -44,7 +44,7 @@ from uuid import UUID
 
 import psycopg
 
-from jobd.domain import prefilter
+from jobd.domain import active_learning, learning, prefilter
 from jobd.domain.envelope import body_text
 from jobd.domain.extraction import (
     EXTRACTION_SCHEMA,
@@ -70,6 +70,7 @@ from jobd.domain.record import (
 )
 from jobd.domain.resolve import (
     ApplicationWindow,
+    is_generic_domain,
     normalise_company,
     normalise_domain,
     pick_application,
@@ -192,15 +193,13 @@ class ClassifyResult:
     #: extractor — on the cloud path, the number of messages that did *not*
     #: leave the machine.
     filtered_out: int = 0
-    #: Deterministically positive (prefilter.Status). Resolved by the
-    #: deterministic extractor, not the configured model — see `_one`'s
-    #: routing. Zero if no `deterministic` provider was passed to
-    #: `classify_pending`, in which case positives fall through to `llm_calls`
-    #: like everything undecided, unchanged from before this counter existed.
-    deterministic_calls: int = 0
+    #: Filtered out by batch triage (label-only cheap prefilter) before full
+    #: extraction. Zero when triage is disabled.
+    triaged_out: int = 0
+    #: Triage LLM calls (batched label-only). Zero when triage is disabled.
+    triage_calls: int = 0
     #: Linked straight from an already-recorded sibling in the same thread —
-    #: no extractor call at all, deterministic or paid. See `_one`'s
-    #: thread-carry-forward branch.
+    #: no extractor call at all. See `_one`'s thread-carry-forward branch.
     carried_forward: int = 0
     llm_calls: int = 0
     #: Of `llm_calls`, how many got a second, bigger-model opinion because
@@ -244,8 +243,8 @@ def classify_pending(
     conn: psycopg.Connection[Any],
     limit: int = 500,
     embed: bool = False,
-    deterministic: LLMProvider | None = None,
     escalation_llm: LLMProvider | None = None,
+    triage_llm: LLMProvider | None = None,
     fetch_workers: int = 32,
     partition: tuple[int, int] | None = None,
     meter: Any = None,
@@ -257,21 +256,20 @@ def classify_pending(
             failure costs one batch, not the run.
         embed: Compute embeddings. Off by default because it doubles the model
             calls.
-        deterministic: Extractor for `prefilter.Status == "positive"`
-            messages — an ATS-domain hit is job-related by construction, so
-            the question left is *what*, and a template-aware rule-based
-            extractor answers that as well as a paid model does for this
-            narrow, structured case (see rulebased.py's own docstring on
-            "where the rules are sure"). `None` means every non-negative
-            message goes to `llm`, unchanged from before this parameter
-            existed.
         escalation_llm: A second, presumably bigger/pricier model tried only
-            when `llm` (or `deterministic`) comes back ambiguous — the same
+            when `llm` comes back ambiguous — the same
             case that would otherwise go straight to `review_queue`. `None`
             (the default) skips this entirely: no second call, unchanged
             from before this parameter existed. Its answer replaces the
             first one outright, including a second "unclassified" — it's a
             second opinion, not a vote.
+        triage_llm: Optional cheap model for batched label-only pre-filtering
+            before full extraction. When provided, messages are batched
+            (30 per call) and rendered with 240-char snippets for a
+            job_related true/false verdict. Negatives are filtered out
+            before `_one` runs (marked classified, never extracted). `None`
+            (the default) skips triage entirely. See `scrape.triage` for the
+            implementation and token-savings rationale.
         fetch_workers: Thread-pool size for the S3 prefetch below. The fetch
             is I/O-bound (network round trip, no CPU work), so a pool of
             blocking `storage.get` calls buys real parallelism even on a
@@ -299,15 +297,37 @@ def classify_pending(
         meter = NullMeter()
     result = ClassifyResult()
     rules = repos.sender_rules.all()
-    # Seeded from the loaded rule set, then grown in place as `_record`
-    # auto-teaches new domains — the gate that stops a confident extraction
-    # from re-teaching (and re-committing) the same domain on every one of
-    # the many messages a real company sends. A domain learned mid-batch is
+    # Seeded from the loaded rule set, then grown in place as the learning
+    # policy teaches new rules — the gate that stops a confident extraction
+    # from re-teaching (and re-committing) the same attribute on every one of
+    # the many messages a real company sends. A rule learned mid-batch is
     # visible to the rest of *this* batch immediately (unlike `rules` above,
     # which is a snapshot); the next batch reloads `rules` fresh regardless.
-    taught_domains = {r.value.lower() for r in rules if r.match_type == "domain"}
+    known = learning.known_verdicts(rules)
     messages = repos.messages.unclassified(limit, partition=partition)
     raws = _prefetch(storage, messages, fetch_workers)
+
+    # Optional triage pre-pass: batch-classify with 240-char snippets to
+    # filter out noise before full extraction. The triage tier is cheap
+    # (batched label-only, no company/stage/role) and conservative (when
+    # uncertain, passes to full classify). See scrape.triage for the pattern.
+    triage_skip_ids: set[Any] = set()
+    if triage_llm is not None:
+        from jobd.scrape.triage import triage_batch
+
+        triage_skip_ids, triage_result = triage_batch(
+            messages, storage=storage, llm=triage_llm, fetch_workers=fetch_workers
+        )
+        result.triage_calls = triage_result.llm_calls
+        result.triaged_out = triage_result.triaged_negative
+        result.errors.extend(triage_result.errors)
+        # Mark triaged-out messages as classified immediately, so they never
+        # re-enter the unclassified queue. No extraction, no record write —
+        # the triage verdict is the final word.
+        for message in messages:
+            if message.id in triage_skip_ids:
+                repos.messages.mark_classified(message.id, f"triage:{triage_llm.name}")
+        conn.commit()
 
     # One commit for the whole batch, not one per message — the WAL fsync
     # per commit was real, serialized cost on top of every write. Per-message
@@ -318,6 +338,11 @@ def classify_pending(
     # — cheap, since re-deriving it is exactly what I3 promises.
     for message in messages:
         result.seen += 1
+        if message.id in triage_skip_ids:
+            # Already marked classified by the triage pass above; skip full
+            # extraction. The triage tier is conservative (uncertain → pass),
+            # so this is the noise we're confident about.
+            continue
         try:
             raw = raws[message.storage_key]
             if isinstance(raw, Exception):
@@ -327,10 +352,9 @@ def classify_pending(
                     message,
                     raw=raw,
                     llm=llm,
-                    deterministic=deterministic,
                     repos=repos,
                     rules=rules,
-                    taught_domains=taught_domains,
+                    known=known,
                     embed=embed,
                     out=result,
                     escalation_llm=escalation_llm,
@@ -361,7 +385,6 @@ def mirror_classify(meter: Any, result: ClassifyResult) -> None:
     deltas, which would reset the row every 500 messages."""
     for key, value in (
         ("prefilter_negative", result.filtered_out),
-        ("rulebased", result.deterministic_calls),
         ("thread_carry", result.carried_forward),
         ("llm_calls", result.llm_calls),
         ("escalated", result.escalated),
@@ -516,10 +539,9 @@ def _one(
     *,
     raw: RawMessage,
     llm: LLMProvider,
-    deterministic: LLMProvider | None,
     repos: Repositories,
     rules: list[SenderRule],
-    taught_domains: set[str],
+    known: dict[str, str],
     embed: bool,
     out: ClassifyResult,
     escalation_llm: LLMProvider | None = None,
@@ -557,8 +579,9 @@ def _one(
     # this message resolves to, that domain is the agency, not the employer
     # — carried through to `_resolve_company`'s no-client fallback and
     # `_record`'s secondary-link write, never into `extraction` itself (so
-    # it never grows `taught_domains`/gets auto-taught as a plain company
-    # domain — see `_is_hardcoded_domain`'s docstring on why that matters).
+    # it never gets auto-taught as a plain company domain — agency domains
+    # are in `resolve.GENERIC_DOMAINS`, which the learning policy refuses
+    # to teach as a company identity).
     agency_domain = (
         learned_domain
         if learned_category == prefilter.SenderCategory.RECRUITING_AGENCY
@@ -613,25 +636,18 @@ def _one(
         repos.reviews.resolve_by_message(message.id)
         return
 
-    # positive -> the deterministic extractor, if one was given (see
-    # classify_pending's docstring on why this is the actual saving the
-    # status taxonomy exists for). undecided, or no deterministic extractor
-    # configured, -> the real model, same as before status existed.
-    extractor = deterministic if verdict.status == "positive" and deterministic else llm
-    if extractor is llm:
-        out.llm_calls += 1
-    else:
-        out.deterministic_calls += 1
+    # Everything the free tiers (prefilter negative, thread/rule carry)
+    # could not settle goes to the model — the only reader of content.
+    extractor = llm
+    out.llm_calls += 1
 
     prompt = PROMPT
     rules_context = ""
-    if verdict.status == "undecided" and extractor.name != "rulebased":
+    if verdict.status == "undecided":
         # Few-shot context from prior confirmed decisions in the same
-        # category — see `learned_rules_context`'s docstring. Only for a
-        # real model: RuleBasedProvider ignores the prompt entirely (pure
-        # regex), so building this for it would be pure waste. Only for
+        # category — see `learned_rules_context`'s docstring. Only for
         # `undecided`: a `positive` message already skipped this branch via
-        # `carried`, or is going to the free deterministic extractor.
+        # `carried` or arrives with its company already proven.
         section = "RECRUITING_AGENCY" if agency_domain else "Direct employers"
         rules_context = learned_rules_context(section)
         if rules_context:
@@ -670,8 +686,8 @@ def _one(
     if verdict.status == "positive" and known_contact and extraction.is_negative:
         # known_contact is a *proven* fact from an earlier confident
         # classification, not this extractor's guess about this one message —
-        # a reply that is all "Tuesday works, see you then" trips none of
-        # rulebased.py's regex signals and would otherwise be silently
+        # a reply that is all "Tuesday works, see you then" carries no
+        # signal a model can anchor on and would otherwise be silently
         # mislabeled negative. The override promotes to "unclassified", not
         # "positive": the domain is trusted, this one message's content
         # still isn't, so it lands in review rather than skipping straight
@@ -680,6 +696,7 @@ def _one(
 
     if extraction.is_negative:
         out.not_job_related += 1
+        _teach_negative(sender, known=known, repos=repos, out=out)
         repos.messages.mark_classified(message.id, extractor.name)
         repos.reviews.resolve_by_message(message.id)
         return
@@ -708,6 +725,7 @@ def _one(
         out.escalated += 1
         if extraction.is_negative:
             out.not_job_related += 1
+            _teach_negative(sender, known=known, repos=repos, out=out)
             repos.messages.mark_classified(message.id, extractor.name)
             repos.reviews.resolve_by_message(message.id)
             return
@@ -735,7 +753,7 @@ def _one(
         message,
         extraction,
         repos=repos,
-        taught_domains=taught_domains,
+        known=known,
         agency_domain=agency_domain,
         out=out,
     )
@@ -754,24 +772,23 @@ def _record(
     extraction: Extraction,
     *,
     repos: Repositories,
-    taught_domains: set[str],
+    known: dict[str, str],
     agency_domain: str | None,
     out: ClassifyResult,
 ) -> None:
     """Write a `label="positive"` extraction into the record.
 
-    Also closes the online-learning loop: this extraction already earned
-    "positive" — the same bar trusted to create the company/application/stage
-    event below — so its `company_domain` is trusted enough to become a rule
-    too — the next message from the same domain shouldn't need an extractor
-    call to learn what this one already confirmed. Taught `undecided`, not
-    `positive`: a system-inferred rule from one message hasn't earned the
-    zero-content, direct-record bypass a human curating a batch grants
-    (see this session's manual `positive` rules) — it only needs to escape
-    the generic bulk-header/bank/label *negative* tier, same mechanism as
-    the amazon.com/bigbox.com-style ambiguous domains. A human can promote
-    it to `positive` later via `learn` once enough messages confirm it's
-    safe to skip the extractor entirely.
+    Also closes the online-learning loop via `learning.on_confident_positive`:
+    this extraction already earned "positive" — the same bar trusted to
+    create the company/application/stage event below — so its
+    `company_domain` is trusted enough to teach. First sighting teaches
+    `undecided` (escapes the bulk-header/label *negative* tier but still
+    pays for the model); a second confident extraction agreeing on the same
+    domain promotes the rule to `positive`, unlocking the zero-cost
+    rule-carry path. A human `learn` can still promote or demote at any
+    point — human rules pre-exist in `known`, and the policy never
+    overwrites a standing verdict except the auto `undecided` → `positive`
+    step.
     """
     assert message.id is not None
     if extraction.stage in ("offer", "accepted", "declined") and (
@@ -804,21 +821,27 @@ def _record(
 
     raw_domain = extraction.company_domain
     domain = normalise_domain(raw_domain) if raw_domain else None
-    if domain and domain not in taught_domains and not _is_hardcoded_domain(domain):
+    teach = (
+        learning.on_confident_positive(company_domain=domain, known=known)
+        if domain
+        else None
+    )
+    if teach is not None:
         repos.sender_rules.add(
             SenderRule(
-                match_type="domain", value=domain, verdict="undecided",
-                company_id=company.id, source="auto",
+                match_type=teach.match_type, value=teach.value,
+                verdict=teach.verdict, company_id=company.id, source="auto",
             )
         )
-        taught_domains.add(domain)
+        known[f"{teach.match_type}:{teach.value}"] = teach.verdict
         out.rules_learned += 1
-        _journal_entry(
-            domain=domain,
-            company=company,
-            stage=extraction.stage,
-            subject=message.subject,
-        )
+        if not teach.promotion:
+            _journal_entry(
+                domain=teach.value,
+                company=company,
+                stage=extraction.stage,
+                subject=message.subject,
+            )
 
     application = _resolve_application(
         extraction, message.sent_at, company.id, repos, out
@@ -905,17 +928,16 @@ def _resolve_company(
     raw_domain = extraction.company_domain
     domain = normalise_domain(raw_domain) if raw_domain else None
     # A GENERIC_DOMAINS domain (personal webmail, an ATS, a scheduler...) is
-    # never a real employer's identity — `prefilter.score` already refuses
-    # to treat one as a positive signal, but nothing stopped it becoming the
-    # company itself once it reached here. Real bug, live-caught: the
-    # extractor read a recruiter's personal `@gmail.com` reply address as
-    # `company_domain`, and 13 unrelated real employers (PayPal, Amazon,
-    # several real employers among them) all got folded into one bogus "Gmail"
-    # company across 26 messages, each spawning its own duplicate
-    # application instead of reaching the real one. Treated as no domain at
-    # all here — falls through to name-based alias resolution below, same as
-    # any other message where the extractor found no domain.
-    if domain in prefilter.GENERIC_DOMAINS:
+    # never a real employer's identity (see `resolve.GENERIC_DOMAINS`'s
+    # docstring). Real bug, live-caught: the extractor read a recruiter's
+    # personal `@gmail.com` reply address as `company_domain`, and 13
+    # unrelated real employers (PayPal, Amazon, several real employers among
+    # them) all got folded into one bogus "Gmail" company across 26
+    # messages, each spawning its own duplicate application instead of
+    # reaching the real one. Treated as no domain at all here — falls
+    # through to name-based alias resolution below, same as any other
+    # message where the extractor found no domain.
+    if domain and is_generic_domain(domain):
         domain = None
     kind: CompanyKind = "employer"
     if domain is None and not extraction.company_name and agency_domain:
@@ -1156,7 +1178,7 @@ def _resolve_application(
 #: silently defeats every negative rule taught for that domain afterward —
 #: found via `noreply@robinhood.com`, which had linked 428 pure account/
 #: marketing messages back into the review queue despite robinhood.com
-#: already being in BANK_DOMAINS. Narrow on purpose: real ATS/company
+#: carrying a negative rule. Narrow on purpose: real ATS/company
 #: addresses like `careers@` or `hello@` do sometimes represent a genuine
 #: recruiting channel, so only the unambiguous automated markers are here.
 _AUTOMATED_LOCAL_PARTS = frozenset(
@@ -1211,26 +1233,36 @@ def _known_contact(
     return False
 
 
-def _is_hardcoded_domain(domain: str) -> bool:
-    """Whether a domain is already decided by a hardcoded list — `_record`'s
-    auto-teach must never write a `sender_rule` for one of these.
+def _teach_negative(
+    sender: str,
+    *,
+    known: dict[str, str],
+    repos: Repositories,
+    out: ClassifyResult,
+) -> None:
+    """Apply `learning.on_model_negative` for one model-negative verdict.
 
-    `BANK_DOMAINS` is the concrete case that surfaced this: a stale company
-    record already exists with `domain="robinhood.com"` from before today's
-    guards (`_company_domain` in rulebased.py only ever excluded
-    `GENERIC_DOMAINS`, not `BANK_DOMAINS`, so a bank sender that slipped
-    past the prefilter once could still get its domain read as a company).
-    Auto-teaching `undecided` for a bank domain would be actively harmful,
-    not just redundant: `undecided` outranks `bank_hit` in `prefilter.score`
-    (that is the whole point of the tier — it exists to *protect* a sender
-    from the bulk-header/bank/label negative check), so it would silently
-    reopen every future message from that domain to the extractor instead
-    of leaving it correctly, permanently negative.
+    The model read the content and said not job-related — the same evidence
+    tier that used to be a hardcoded `BANK_DOMAINS` entry, now earned per
+    sender in one call. The policy scopes the rule (domain vs address, see
+    `learning.py`) and refuses to touch senders any rule already covers.
     """
-    return any(
-        domain == d or domain.endswith(f".{d}")
-        for d in (prefilter.BANK_DOMAINS | prefilter.GENERIC_DOMAINS)
+    from email.utils import getaddresses
+
+    addresses = [a for _, a in getaddresses([sender]) if a]
+    if not addresses:
+        return
+    teach = learning.on_model_negative(sender_address=addresses[0], known=known)
+    if teach is None:
+        return
+    repos.sender_rules.add(
+        SenderRule(
+            match_type=teach.match_type, value=teach.value,
+            verdict=teach.verdict, source="auto",
+        )
     )
+    known[f"{teach.match_type}:{teach.value}"] = teach.verdict
+    out.rules_learned += 1
 
 
 def _match_rule(
@@ -1242,9 +1274,9 @@ def _match_rule(
     domain") should not be shadowed by a coarser domain rule.
 
     Domain rules match by suffix (`shein.com` covers `market-us.shein.com`
-    *and* `news.edmmarket.shein.com`), same as `ATS_DOMAINS`/`BANK_DOMAINS` —
-    real marketing platforms send from a different subdomain per campaign,
-    and an exact-match rule would need re-teaching for every one of them.
+    *and* `news.edmmarket.shein.com`) — real marketing platforms send from a
+    different subdomain per campaign, and an exact-match rule would need
+    re-teaching for every one of them.
 
     Returns ``(verdict, company_id, category, matched_domain)``. The 4th
     element is the matched rule's own domain value (lowercased) when the
@@ -1365,8 +1397,14 @@ def sweep_review_queue(
         meter = NullMeter()
     out = SweepResult()
     rules = repos.sender_rules.all()
-    taught = {r.value.lower() for r in rules if r.match_type == "domain"}
+    known = learning.known_verdicts(rules)
     inner = ClassifyResult()
+
+    # Algorithm improvement #2: impact-ranked review queue (active learning).
+    # Rank by expected information gain — the decision that clears the most
+    # residue appears first — rather than FIFO (created_at).
+    ranked = active_learning.rank_queue_items(conn, limit=limit)
+    ranked_ids = {r.message_id for r in ranked}
 
     rows = conn.execute(
         """
@@ -1374,10 +1412,15 @@ def sweep_review_queue(
                m.reply_to, m.cc_addresses, m.is_bulk, m.in_reply_to,
                m.raw_metadata ->> 'labels' AS labels
         FROM review_queue rq JOIN message m ON m.id = rq.message_id
-        WHERE rq.status = 'pending' ORDER BY rq.created_at LIMIT %s
+        WHERE rq.status = 'pending'
+          AND rq.message_id = ANY(%s)
         """,
-        (limit,),
+        (list(ranked_ids),),
     ).fetchall()
+
+    # Restore the rank order (the JOIN may have shuffled rows)
+    ranked_map = {r.message_id: r for r in ranked}
+    rows = sorted(rows, key=lambda row: ranked_map[row[1]].impact_score, reverse=True)
 
     meter.set_total(len(rows))
     meter.set_counter("phase", "free-gates")
@@ -1615,6 +1658,11 @@ def sweep_review_queue(
                         out.rejected_domains[domain] = (
                             out.rejected_domains.get(domain, 0) + 1
                         )
+                    # The judge is the *stronger* model — its negative earns
+                    # a rule under the same policy classify-time negatives
+                    # do; `rejected_domains` above still surfaces the tally
+                    # for a human to audit.
+                    _teach_negative(sender, known=known, repos=repos, out=inner)
                     repos.messages.mark_classified(message.id, judge.name)
                     repos.reviews.resolve_by_message(message.id)
                 elif extraction.is_positive and (
@@ -1624,7 +1672,7 @@ def sweep_review_queue(
                         message,
                         extraction,
                         repos=repos,
-                        taught_domains=taught,
+                        known=known,
                         agency_domain=agency_domain,
                         out=inner,
                     )
