@@ -290,12 +290,13 @@ def classify_pending(
             first one outright, including a second "unclassified" — it's a
             second opinion, not a vote.
         triage_llm: Optional cheap model for batched label-only pre-filtering
-            before full extraction. When provided, messages are batched
-            (30 per call) and rendered with 240-char snippets for a
-            job_related true/false verdict. Negatives are filtered out
-            before `_one` runs (marked classified, never extracted). `None`
-            (the default) skips triage entirely. See `scrape.triage` for the
-            implementation and token-savings rationale.
+            before full extraction. When provided, messages that survive the
+            free tiers with a paid call planned are batched (30 per call)
+            and rendered with 240-char snippets for a job_related true/false
+            verdict. Negatives are dropped before phase 2 (marked
+            classified, sender taught an address rule, never extracted).
+            `None` (the default) skips triage entirely. See `scrape.triage`
+            for the implementation and token-savings rationale.
         fetch_workers: Thread-pool size for the S3 prefetch below. The fetch
             is I/O-bound (network round trip, no CPU work), so a pool of
             blocking `storage.get` calls buys real parallelism even on a
@@ -346,28 +347,6 @@ def classify_pending(
     messages = repos.messages.unclassified(limit, partition=partition)
     raws = _prefetch(storage, messages, fetch_workers)
 
-    # Optional triage pre-pass: batch-classify with 240-char snippets to
-    # filter out noise before full extraction. The triage tier is cheap
-    # (batched label-only, no company/stage/role) and conservative (when
-    # uncertain, passes to full classify). See scrape.triage for the pattern.
-    triage_skip_ids: set[Any] = set()
-    if triage_llm is not None:
-        from jobd.scrape.triage import triage_batch
-
-        triage_skip_ids, triage_result = triage_batch(
-            messages, storage=storage, llm=triage_llm, fetch_workers=fetch_workers
-        )
-        result.triage_calls = triage_result.llm_calls
-        result.triaged_out = triage_result.triaged_negative
-        result.errors.extend(triage_result.errors)
-        # Mark triaged-out messages as classified immediately, so they never
-        # re-enter the unclassified queue. No extraction, no record write —
-        # the triage verdict is the final word.
-        for message in messages:
-            if message.id in triage_skip_ids:
-                repos.messages.mark_classified(message.id, f"triage:{triage_llm.name}")
-        conn.commit()
-
     # Three phases, mirroring `sweep_review_queue`'s proven split. Phase 1
     # (sequential) runs the free tiers and plans the model calls; phase 2
     # (parallel) makes them; phase 3 (sequential) applies them. The LLM call
@@ -377,11 +356,6 @@ def classify_pending(
     jobs: list[_Job] = []
     for message in messages:
         result.seen += 1
-        if message.id in triage_skip_ids:
-            # Already marked classified by the triage pass above; skip full
-            # extraction. The triage tier is conservative (uncertain → pass),
-            # so this is the noise we're confident about.
-            continue
         try:
             raw = raws[message.storage_key]
             if isinstance(raw, Exception):
@@ -410,6 +384,51 @@ def classify_pending(
             # transaction holds those row locks for minutes and serializes
             # every other partition behind it. Per-message commits trade WAL
             # fsyncs for lock hold times in the milliseconds.
+            conn.commit()
+
+    # Optional triage pass, AFTER the free tiers (AGENTS.md: the free tier
+    # always runs first) — a message a learned rule, prefilter negative, or
+    # thread/rule-carry already settled must not pay even a cheap triage
+    # slot. Only jobs still holding a planned paid call are triaged; a job
+    # answered by the stored thread reading (`precomputed`) is already free.
+    # The triage tier is cheap (batched label-only, 240-char snippets) and
+    # conservative (uncertain → pass to full extraction). Raw bytes come
+    # from the prefetch above — triage never re-downloads them from S3.
+    if triage_llm is not None and jobs:
+        from jobd.scrape.triage import triage_batch
+
+        candidates = [j for j in jobs if j.precomputed is None]
+        triage_skip_ids, triage_result = triage_batch(
+            [j.message for j in candidates],
+            llm=triage_llm,
+            raws=raws,
+            storage=storage,
+            fetch_workers=fetch_workers,
+        )
+        result.triage_calls = triage_result.llm_calls
+        result.triaged_out = triage_result.triaged_negative
+        result.errors.extend(triage_result.errors)
+        if triage_skip_ids:
+            kept: list[_Job] = []
+            for job in jobs:
+                if job.message.id not in triage_skip_ids:
+                    kept.append(job)
+                    continue
+                assert job.message.id is not None
+                # The planned extract never happens — undo `_prepare_one`'s
+                # charge. The verdict is final: marked classified so the
+                # message never re-enters the unclassified queue, and the
+                # sender is taught so its next message settles in the free
+                # tier instead of paying triage forever.
+                result.llm_calls -= 1
+                with conn.transaction():
+                    _teach_triage_negative(
+                        job.sender, known=known, repos=repos, out=result
+                    )
+                    repos.messages.mark_classified(
+                        job.message.id, f"triage:{triage_llm.name}"
+                    )
+            jobs = kept
             conn.commit()
 
     # Phase 2 — the model calls, concurrently. Counters are NOT bumped here:
@@ -634,6 +653,10 @@ class _Job:
     #: counters don't race) folds these into `thread_llm_reused` and skips
     #: the redundant `save_thread` upsert — the payer already saved.
     reused_in_batch: bool = False
+    #: The message's `text[:2000]` embedding when the few-shot lookup
+    #: computed one — reused by `_apply_one`'s `embed=True` write so the
+    #: identical slice is never embedded twice.
+    embedding: list[float] | None = None
 
 
 def _prepare_one(
@@ -769,10 +792,6 @@ def _prepare_one(
         rules_context = learned_rules_context(section)
         if rules_context:
             prompt = rules_context + "\n" + prompt
-        # Algorithm improvement #4: retrieval-augmented few-shot.
-        similar = _similar_examples_context(llm, repos, text, k=3)
-        if similar:
-            prompt = similar + "\n" + prompt
 
     rendered = render_for_model(
         sender=sender,
@@ -830,6 +849,21 @@ def _prepare_one(
                     "messages_covered": latest["thread_messages"],
                 }
 
+    # Algorithm improvement #4: retrieval-augmented few-shot — after the
+    # thread-cache check, so a message answered from a stored reading never
+    # pays the embed call it cannot use. The thread-level prompt does not
+    # carry the examples (it reads the whole conversation), but the
+    # escalation call is always single-message, so the examples ride there
+    # either way. The vector is stashed on the job for `_apply_one`'s
+    # `embed=True` write — same `text[:2000]` slice, one embed call total.
+    embedding: list[float] | None = None
+    if precomputed is None and verdict.status == "undecided":
+        embedding, similar = _similar_examples_context(llm, repos, text, k=3)
+        if similar:
+            if schema is EXTRACTION_SCHEMA:
+                prompt = similar + "\n" + prompt
+            escalate_prompt = similar + "\n" + escalate_prompt
+
     return _Job(
         message=message,
         text=text,
@@ -847,6 +881,7 @@ def _prepare_one(
         verdict_status=verdict.status,
         escalate_prompt=escalate_prompt,
         escalate_rendered=escalate_rendered,
+        embedding=embedding,
     )
 
 
@@ -1016,7 +1051,11 @@ def _apply_one(
     )
 
     if embed:
-        vector = llm.embed([job.text[:2000]])[0]
+        # The few-shot lookup in `_prepare_one` embeds the identical
+        # `text[:2000]` slice; reuse its vector rather than paying twice.
+        vector = job.embedding
+        if vector is None:
+            vector = llm.embed([job.text[:2000]])[0]
         repos.messages.set_embedding(message.id, vector)
 
     out.recorded += 1
@@ -1573,6 +1612,44 @@ def _teach_negative(
     out.rules_learned += 1
 
 
+def _teach_triage_negative(
+    sender: str,
+    *,
+    known: dict[str, str],
+    repos: Repositories,
+    out: ClassifyResult,
+) -> None:
+    """Teach from a triage negative — address-scoped only, never domain-wide.
+
+    A 240-char snippet verdict is weaker evidence than the full read that
+    already needs escalation confirmation before teaching a NEW domain rule
+    (see `_apply_one`); confirming with a full extraction here would cost
+    more than triage saved. So a would-be domain teach is narrowed to the
+    concrete sender address: blast radius one correspondent, and a repeat
+    noise sender still stops paying a triage slot for every future message.
+    Same standing-rule guard as the model path — `on_model_negative` returns
+    None when any rule already covers the sender.
+    """
+    from email.utils import getaddresses
+
+    addresses = [a for _, a in getaddresses([sender]) if a]
+    if not addresses:
+        return
+    teach = learning.on_model_negative(sender_address=addresses[0], known=known)
+    if teach is None:
+        return
+    value = (
+        teach.value
+        if teach.match_type == "address"
+        else addresses[0].lower().strip().strip("<>")
+    )
+    repos.sender_rules.add(
+        SenderRule(match_type="address", value=value, verdict="negative", source="auto")
+    )
+    known[f"address:{value}"] = "negative"
+    out.rules_learned += 1
+
+
 def _match_rule(
     rules: list[SenderRule], sender: str, recipients: str
 ) -> tuple[
@@ -1673,17 +1750,25 @@ def _looks_terminal(subject: str | None, text: str) -> bool:
     return any(term in haystack for term in _TERMINAL_TERMS)
 
 
-#: Substrings of an LLM-provider error that mean "the whole run is doomed",
-#: not "this one message failed". A dead key, an exhausted quota, a revoked
-#: credential, or a hard daily/key limit cannot be fixed by retrying the other
-#: 50k messages — continuing would just turn one failure into a loop. These
-#: abort the run so the operator sees a clear failure instead of a spinning
-#: batch. Deliberately does NOT include "rate limit" — a transient upstream
-#: 429 is retryable, and is handled by `_ask`'s backoff, not by aborting.
+#: LLM-provider errors that mean "the whole run is doomed", not "this one
+#: message failed". A dead key, an exhausted quota/budget, or a revoked
+#: credential cannot be fixed by retrying the other 50k messages —
+#: continuing would just turn one failure into a loop. These abort the run
+#: so the operator sees a clear failure instead of a spinning batch.
+#: Deliberately does NOT include rate limits — a transient upstream 429 is
+#: retryable, handled by `_ask`'s backoff, not by aborting.
+#:
+#: Detection is typed first (litellm surfaces OpenAI-style exception classes
+#: carrying `status_code`), substring last. The substrings are deliberately
+#: specific phrases: an earlier tuple had "limit exceeded" and bare "auth",
+#: which matched "Rate limit exceeded: 20 requests per minute" (a routine
+#: 429) and any error mentioning "author"/"OAuth" — aborting runs the retry
+#: loop was built to survive.
 _FATAL_LLM_MARKERS = (
-    "limit exceeded",
     "quota",
-    "auth",
+    "authentication",
+    "invalid api key",
+    "incorrect api key",
     "unauthorized",
     "forbidden",
     "insufficient",
@@ -1691,9 +1776,32 @@ _FATAL_LLM_MARKERS = (
     "credits",
 )
 
+#: Exception class names litellm/openai raise for unrecoverable conditions —
+#: matched by name so the optional `litellm` extra is never imported here.
+_FATAL_LLM_ERROR_TYPES = frozenset(
+    {"AuthenticationError", "PermissionDeniedError", "BudgetExceededError"}
+)
+
+#: HTTP statuses that are unrecoverable per-key, not per-message: bad
+#: credential (401), out of credits (402), revoked access (403). 429 is
+#: intentionally absent — it is the retryable case.
+_FATAL_LLM_STATUS_CODES = frozenset({401, 402, 403})
+
 
 def _is_fatal_llm_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
+    status = getattr(exc, "status_code", None)
+    # Rate limits win over every other marker: a 429 text routinely also
+    # says "quota"/"credits", and treating it fatal aborts on the first
+    # throttle instead of riding it out via `_ask`'s backoff.
+    if status == 429 or type(exc).__name__ == "RateLimitError":
+        return False
+    if "rate limit" in msg or "rate-limit" in msg or "ratelimit" in msg:
+        return False
+    if type(exc).__name__ in _FATAL_LLM_ERROR_TYPES:
+        return True
+    if status in _FATAL_LLM_STATUS_CODES:
+        return True
     return any(marker in msg for marker in _FATAL_LLM_MARKERS)
 
 
@@ -1706,35 +1814,39 @@ _TRANSIENT_BACKOFF = 3.0  # seconds, linear per attempt
 
 def _similar_examples_context(
     llm: LLMProvider, repos: Repositories, text: str, *, k: int = 3
-) -> str:
+) -> tuple[list[float] | None, str]:
     """Retrieval-augmented few-shot for uncertain messages (algorithm-
     improvements.md #4): embed the message, find the k most-similar
     already-resolved messages, and render them as concrete analogies for the
-    extractor. Empty string when embeddings were never computed, the provider
-    can't embed, or nothing is close enough — a few-shot miss must never fail
-    the message it was meant to help."""
+    extractor. Empty context when embeddings were never computed, the
+    provider can't embed, or nothing is close enough — a few-shot miss must
+    never fail the message it was meant to help. The vector is returned even
+    when the context is empty: the caller stashes it on the `_Job` so the
+    `embed=True` storage write reuses it instead of paying a second embed
+    call for the identical `text[:2000]` slice."""
     if k <= 0 or not text or not text.strip():
-        return ""
+        return None, ""
     messages = repos.messages
     has_embeddings = getattr(messages, "has_embeddings", None)
     similar = getattr(messages, "similar_resolved", None)
     if has_embeddings is None or similar is None:
-        return ""
+        return None, ""
+    vector: list[float] | None = None
     try:
         if not has_embeddings():
-            return ""
+            return None, ""
         vector = llm.embed([text[:2000]])[0]
         rows = similar(vector, limit=k)
     except Exception:
-        return ""
+        return vector, ""
     if not rows:
-        return ""
+        return vector, ""
     lines = ["Resolved examples most similar to this message:"]
     for row in rows:
         subject = (row.get("subject") or "").strip()[:80]
         company = row.get("company") or "?"
         lines.append(f"- {company} | {subject}")
-    return "\n".join(lines)
+    return vector, "\n".join(lines)
 
 
 def _is_hardcoded_domain(domain: str) -> bool:

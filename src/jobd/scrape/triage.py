@@ -7,11 +7,14 @@ same as genuine job mail, token for token. The old BANK_DOMAINS list addressed
 this by hardcoding verdicts; with learned rules replacing it, we need a cheaper
 gate before the model reads the full body.
 
-The solution: batch triage, inspired by audit.py's proven pattern. Before
-classify_pending extracts, batch 30 messages at a time and render each with a
-240-char snippet (subject + body prefix). Extract label-only: job_related
-true/false, no company/stage/role. Negatives are filtered out immediately;
-positives pass to the existing classify pipeline for full extraction.
+The solution: batch triage, inspired by audit.py's proven pattern. After
+classify_pending's free tiers settle what they can (rules, prefilter,
+thread/rule-carry, the stored thread cache — triage must never charge a
+message the free tier already answered), batch the remaining paid-call
+candidates 30 at a time and render each with a 240-char snippet (subject +
+body prefix). Extract label-only: job_related true/false, no
+company/stage/role. Negatives are filtered out immediately; positives pass
+to the existing classify pipeline for full extraction.
 
 Token savings: ~1/30th per noise message (one 240-char batch slot vs. one
 2000+ char full extraction). On a corpus where 8% is noise, this cuts ~7% of
@@ -27,6 +30,7 @@ noise) is the unacceptable error, measured in the triage eval.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
@@ -149,8 +153,9 @@ def _prefetch(
 def triage_batch(
     messages: list[Message],
     *,
-    storage: Storage,
     llm: LLMProvider,
+    storage: Storage | None = None,
+    raws: Mapping[str, RawMessage | Exception] | None = None,
     fetch_workers: int = 32,
 ) -> tuple[set[UUID], TriageResult]:
     """Run triage on a batch of messages. Returns (ids to skip, result).
@@ -162,8 +167,13 @@ def triage_batch(
     Args:
         messages: Unclassified messages to triage (batch size controlled by
             caller; recommend 100-300 to amortize the prefetch).
-        storage: Storage port for fetching raw message bytes.
         llm: Triage extractor (flash model recommended).
+        storage: Storage port for fetching raw message bytes. Optional when
+            `raws` covers every message.
+        raws: Already-fetched raw bytes by storage key — classify_pending
+            prefetches the identical bytes for its own phases, and fetching
+            them from S3 twice doubled the round trips for nothing. Keys
+            missing here fall back to `storage`.
         fetch_workers: Thread-pool size for S3 prefetch.
 
     Returns:
@@ -175,8 +185,15 @@ def triage_batch(
     if not messages:
         return skip_ids, result
 
-    # Prefetch all raw bytes concurrently, same as classify_pending does.
-    raws = _prefetch(storage, messages, fetch_workers)
+    fetched: dict[str, RawMessage | Exception] = dict(raws) if raws else {}
+    missing = [m for m in messages if m.storage_key not in fetched]
+    if missing:
+        if storage is None:
+            raise ValueError(
+                "triage_batch: no storage to fetch "
+                f"{len(missing)} keys absent from raws"
+            )
+        fetched.update(_prefetch(storage, missing, fetch_workers))
 
     # Batch into 30-message chunks for triage extraction.
     for start in range(0, len(messages), _BATCH):
@@ -186,7 +203,7 @@ def triage_batch(
         # Render each message as a numbered snippet.
         rows: list[tuple[Message, str, str, str]] = []
         for msg in batch:
-            raw = raws.get(msg.storage_key)
+            raw = fetched.get(msg.storage_key)
             if raw is None or isinstance(raw, Exception):
                 # Prefetch failed — skip this message (it will error in
                 # classify_pending anyway, so triaging it is moot).
