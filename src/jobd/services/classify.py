@@ -35,6 +35,7 @@ into a timeline that never happened.
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -406,15 +407,22 @@ def classify_pending(
     def _ask(job: _Job) -> tuple[_Job, dict[str, Any] | Exception]:
         if job.precomputed is not None:
             return job, job.precomputed
-        try:
-            return job, job.extractor.extract(job.prompt, job.schema, text=job.rendered)
-        except Exception as exc:  # scored as an error in the apply phase
-            if _is_fatal_llm_error(exc):
-                # A dead key / exhausted quota / revoked auth is not a
-                # per-message problem — retrying the other 50k messages against
-                # it is an infinite loop, not progress. Abort the run.
-                raise
-            return job, exc
+        last_exc: Exception | None = None
+        for attempt in range(_TRANSIENT_RETRIES):
+            try:
+                return job, job.extractor.extract(job.prompt, job.schema, text=job.rendered)
+            except Exception as exc:  # scored as an error in the apply phase
+                last_exc = exc
+                if _is_fatal_llm_error(exc):
+                    # A dead key / exhausted quota / revoked auth is not a
+                    # per-message problem — retrying the other 50k messages
+                    # against it is an infinite loop, not progress. Abort.
+                    raise
+                # Transient (rate limit, gateway 5xx, timeout): back off and
+                # retry a bounded number of times, then let the apply phase
+                # score it as a per-message error.
+                time.sleep(_TRANSIENT_BACKOFF * (attempt + 1))
+        return job, last_exc  # type: ignore[return-value]
 
     if llm_workers > 1 and len(jobs) > 1:
         with ThreadPoolExecutor(max_workers=llm_workers) as pool:
@@ -1518,12 +1526,13 @@ def _looks_terminal(subject: str | None, text: str) -> bool:
 
 #: Substrings of an LLM-provider error that mean "the whole run is doomed",
 #: not "this one message failed". A dead key, an exhausted quota, a revoked
-#: credential, or a hard rate limit cannot be fixed by retrying the other 50k
-#: messages — continuing would just turn one failure into a loop. These abort
-#: the run so the operator sees a clear failure instead of a spinning batch.
+#: credential, or a hard daily/key limit cannot be fixed by retrying the other
+#: 50k messages — continuing would just turn one failure into a loop. These
+#: abort the run so the operator sees a clear failure instead of a spinning
+#: batch. Deliberately does NOT include "rate limit" — a transient upstream
+#: 429 is retryable, and is handled by `_ask`'s backoff, not by aborting.
 _FATAL_LLM_MARKERS = (
     "limit exceeded",
-    "rate limit",
     "quota",
     "auth",
     "unauthorized",
@@ -1537,6 +1546,13 @@ _FATAL_LLM_MARKERS = (
 def _is_fatal_llm_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return any(marker in msg for marker in _FATAL_LLM_MARKERS)
+
+
+#: Bounded retry for transient provider errors (upstream 429, gateway 5xx,
+#: timeouts) — enough to ride out a momentary throttle without turning a
+#: sustained outage into a long stall. A fatal error aborts before this.
+_TRANSIENT_RETRIES = 3
+_TRANSIENT_BACKOFF = 3.0  # seconds, linear per attempt
 
 
 def _similar_examples_context(

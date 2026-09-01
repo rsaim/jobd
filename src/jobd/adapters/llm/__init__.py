@@ -23,7 +23,9 @@ __all__ = ["DEFAULT_MODEL", "OllamaProvider", "load_provider"]
 #: The model used when neither `--model` nor `JOBD_MODEL` says otherwise.
 #: A configuration default, not a classification rule: cheap, fast, and
 #: good enough for the extraction schema — swap freely via `JOBD_MODEL`.
-DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+#: `:free` is OpenRouter's zero-cost tier — rate-limited upstream (shared
+#: pool), so bulk classify against it is slow but spends nothing.
+DEFAULT_MODEL = "openrouter/z-ai/glm-5.2:free"
 
 
 def load_provider(

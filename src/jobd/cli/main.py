@@ -738,8 +738,13 @@ def classify(
 
     from jobd.adapters.llm.credits import CreditGuard, CreditsLow
 
+    #: OpenRouter's `:free` tier spends no credits, so the balance floor must
+    #: not gate it — a $0 key is fine there. The rate limit is the gate, and
+    #: that surfaces as a fatal "limit exceeded" (or a transient 429 the
+    #: classifier retries), never as a credits check.
+    free_model = ":free" in provider.name
     guard = CreditGuard()
-    if provider.name.startswith("openrouter/"):
+    if provider.name.startswith("openrouter/") and not free_model:
         # Fail before burning anything — a 402 halfway through a mailbox is
         # half a run's spend for nothing (live-caught on the first audit).
         try:
@@ -798,20 +803,40 @@ def classify(
                 )
                 _accumulate(totals, batch)
                 mirror_classify(meter, totals)
-                balance = guard.balance()
-                if balance is not None:
-                    meter.set_counter("credits_left", round(balance, 2))
-                if not guard.ok():
-                    # Stop at the batch boundary, cleanly: everything so far
-                    # is committed, the run row says why, and the next
-                    # `--all` resumes exactly where this stopped.
+                if not free_model:
+                    balance = guard.balance()
+                    if balance is not None:
+                        meter.set_counter("credits_left", round(balance, 2))
+                    if not guard.ok():
+                        # Stop at the batch boundary, cleanly: everything so
+                        # far is committed, the run row says why, and the next
+                        # `--all` resumes exactly where this stopped.
+                        click.echo(
+                            f"stopping: OpenRouter balance ${balance:.2f} under "
+                            f"the ${guard.floor:.2f} floor — resume after "
+                            "topping up at https://openrouter.ai/settings/credits",
+                            err=True,
+                        )
+                        meter.finish("low-credits")
+                        break
+                # No-progress guard: a batch that saw messages but settled none
+                # of them means every one errored — looping again would just
+                # re-fail the same rows forever. Stop and say so.
+                settled = (
+                    batch.filtered_out
+                    + batch.carried_forward
+                    + batch.not_job_related
+                    + batch.queued_for_review
+                    + batch.recorded
+                )
+                if batch.seen and settled == 0 and batch.errors:
                     click.echo(
-                        f"stopping: OpenRouter balance ${balance:.2f} under "
-                        f"the ${guard.floor:.2f} floor — resume after "
-                        "topping up at https://openrouter.ai/settings/credits",
+                        f"stopping: batch of {batch.seen} made no progress "
+                        f"({len(batch.errors)} errors) — likely a persistent "
+                        "provider error; fix it and re-run to resume.",
                         err=True,
                     )
-                    meter.finish("low-credits")
+                    meter.finish("failed")
                     break
                 if run_all and batch.seen:
                     click.echo(
