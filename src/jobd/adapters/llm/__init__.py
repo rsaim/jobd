@@ -21,11 +21,12 @@ from jobd.adapters.llm.ollama import OllamaProvider
 __all__ = ["DEFAULT_MODEL", "OllamaProvider", "load_provider"]
 
 #: The model used when neither `--model` nor `JOBD_MODEL` says otherwise.
-#: A configuration default, not a classification rule: cheap, fast, and
-#: good enough for the extraction schema — swap freely via `JOBD_MODEL`.
-#: `:free` is OpenRouter's zero-cost tier — rate-limited upstream (shared
-#: pool), so bulk classify against it is slow but spends nothing.
-DEFAULT_MODEL = "openrouter/z-ai/glm-5.2:free"
+#: A configuration default, not a classification rule — swap freely via
+#: `JOBD_MODEL`. `:free` is OpenRouter's zero-cost tier, rate-limited against
+#: a shared upstream pool, so bulk classify is slow but spends nothing. This
+#: one (Nemotron Super 120B MoE) is the least-throttled free model that still
+#: supports strict structured output for the extraction schema.
+DEFAULT_MODEL = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
 
 
 def load_provider(
