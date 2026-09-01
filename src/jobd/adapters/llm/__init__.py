@@ -22,11 +22,9 @@ __all__ = ["DEFAULT_MODEL", "OllamaProvider", "load_provider"]
 
 #: The model used when neither `--model` nor `JOBD_MODEL` says otherwise.
 #: A configuration default, not a classification rule — swap freely via
-#: `JOBD_MODEL`. `:free` is OpenRouter's zero-cost tier, rate-limited against
-#: a shared upstream pool, so bulk classify is slow but spends nothing. This
-#: one (Nemotron Super 120B MoE) is the least-throttled free model that still
-#: supports strict structured output for the extraction schema.
-DEFAULT_MODEL = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+#: `JOBD_MODEL`. DeepSeek V4 Flash 0731 is the top flash model by OpenRouter
+#: usage (12.2T tokens, Sep 2026) and validates against the extraction schema.
+DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 def load_provider(
