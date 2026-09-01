@@ -332,6 +332,12 @@ def classify_pending(
     # teaches an `undecided` rule so a second message in the same batch can
     # promote against it.
     known_company = learning.known_companies(rules)
+    # Standing category by rule key. `SenderRuleRepository.add` upserts the
+    # whole row, so a promotion rewrite must carry the row's own category or
+    # it would silently degroup the rule from its `sender_category`.
+    rule_category = {
+        learning._key(r.match_type, r.value): r.category for r in rules
+    }
     messages = repos.messages.unclassified(limit, partition=partition)
     raws = _prefetch(storage, messages, fetch_workers)
 
@@ -443,6 +449,7 @@ def classify_pending(
                     repos=repos,
                     known=known,
                     known_company=known_company,
+                    rule_category=rule_category,
                     embed=embed,
                     out=result,
                     escalation_llm=escalation_llm,
@@ -599,7 +606,7 @@ def _prepare_one(
     repos: Repositories,
     rules: list[SenderRule],
     known: dict[str, str],
-    known_company: dict[str, object],
+    known_company: dict[str, tuple[object, str]],
     out: ClassifyResult,
     escalation_llm: LLMProvider | None = None,
 ) -> _Job | None:
@@ -785,7 +792,8 @@ def _apply_one(
     llm: LLMProvider,
     repos: Repositories,
     known: dict[str, str],
-    known_company: dict[str, object],
+    known_company: dict[str, tuple[object, str]],
+    rule_category: dict[str, str | None],
     embed: bool,
     out: ClassifyResult,
     escalation_llm: LLMProvider | None = None,
@@ -846,19 +854,29 @@ def _apply_one(
             extraction.names_a_company or job.agency_domain
         )
 
-    # Exploration finding (#3): the model did not confirm a negative rule it
-    # was re-checking — demote the stale rule to `undecided`.
-    if job.explored and not extraction.is_negative and job.learned_rule is not None:
+    # Exploration finding (#3): the model confidently contradicted a negative
+    # rule it was re-checking — demote the stale rule to `undecided`. Only a
+    # `positive` read counts: an "unclassified" punt (routine for flash
+    # models) is absence of evidence, not contradiction, and leaves the rule
+    # standing. Human rules are never demoted by the machine, and the write
+    # carries the row's category/company_id — the upsert rewrites the whole
+    # row, and NULLs there would sever `sender_category` grouping and erase
+    # the pinned company.
+    if job.explored and extraction.is_positive and job.learned_rule is not None:
         if job.learned_rule.source != "human":
             repos.sender_rules.add(
                 SenderRule(
                     match_type=job.learned_rule.match_type,
                     value=job.learned_rule.value,
                     verdict="undecided",
+                    category=job.learned_rule.category,
+                    company_id=job.learned_rule.company_id,
                     source="auto",
                 )
             )
-            known[f"{job.learned_rule.match_type}:{job.learned_rule.value}"] = "undecided"
+            known[
+                learning._key(job.learned_rule.match_type, job.learned_rule.value)
+            ] = "undecided"
             out.rules_demoted += 1
 
     if ambiguous:
@@ -883,6 +901,7 @@ def _apply_one(
         repos=repos,
         known=known,
         known_company=known_company,
+        rule_category=rule_category,
         agency_domain=job.agency_domain,
         out=out,
     )
@@ -902,7 +921,8 @@ def _record(
     *,
     repos: Repositories,
     known: dict[str, str],
-    known_company: dict[str, object],
+    known_company: dict[str, tuple[object, str]],
+    rule_category: dict[str, str | None],
     agency_domain: str | None,
     out: ClassifyResult,
 ) -> None:
@@ -918,9 +938,10 @@ def _record(
     the zero-cost rule-carry path. A human `learn` can still promote or
     demote at any point — human rules pre-exist in `known`, and the policy
     never overwrites a standing verdict except the auto `undecided` →
-    `positive` step, which additionally refuses to promote an agency domain
-    or a domain that resolved to two different companies (algorithm-
-    improvements.md #1).
+    `positive` step, which additionally refuses to promote an agency domain,
+    a domain that resolved to two different companies, an `undecided` with no
+    pinned company to agree with, or a human-sourced rule (algorithm-
+    improvements.md #1; AGENTS.md's machine-never-over-human contract).
     """
     assert message.id is not None
     if extraction.stage in ("offer", "accepted", "declined") and (
@@ -968,14 +989,23 @@ def _record(
         repos.sender_rules.add(
             SenderRule(
                 match_type=teach.match_type, value=teach.value,
-                verdict=teach.verdict, company_id=company.id, source="auto",
+                verdict=teach.verdict,
+                # The upsert rewrites the whole row: a promotion must carry
+                # the standing row's category (a first sighting has no row,
+                # so the lookup yields None) or the write would degroup the
+                # rule from its `sender_category`.
+                category=rule_category.get(
+                    learning._key(teach.match_type, teach.value)
+                ),
+                company_id=company.id, source="auto",
             )
         )
         known[f"{teach.match_type}:{teach.value}"] = teach.verdict
         if teach.match_type == "domain" and not teach.promotion:
-            # First sighting: pin the company so a second message from this
-            # domain can be promoted against it (algorithm-improvements.md #1).
-            known_company[f"domain:{teach.value}"] = company.id
+            # First sighting: pin the company (with the auto source the
+            # promotion guard checks) so a second message from this domain
+            # can be promoted against it (algorithm-improvements.md #1).
+            known_company[f"domain:{teach.value}"] = (company.id, "auto")
         out.rules_learned += 1
         if not teach.promotion:
             _journal_entry(
@@ -1664,6 +1694,11 @@ def sweep_review_queue(
     rules = repos.sender_rules.all()
     known = learning.known_verdicts(rules)
     known_company = learning.known_companies(rules)
+    # Same category carry as classify_pending: the promotion upsert rewrites
+    # the whole row and must not degroup a categorised rule.
+    rule_category = {
+        learning._key(r.match_type, r.value): r.category for r in rules
+    }
     inner = ClassifyResult()
 
     # Algorithm improvement #2: impact-ranked review queue (active learning).
@@ -1946,6 +1981,7 @@ def sweep_review_queue(
                         repos=repos,
                         known=known,
                         known_company=known_company,
+                        rule_category=rule_category,
                         agency_domain=agency_domain,
                         out=inner,
                     )

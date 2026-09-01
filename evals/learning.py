@@ -51,10 +51,10 @@ class RuleState:
     known: dict[str, str] = field(default_factory=dict)
     #: company name by taught domain — what rule-carry answers with.
     companies: dict[str, str] = field(default_factory=dict)
-    #: domain rule key → the company that first sighting was taught against,
-    #: the entity-consistency index the promotion guard consults
-    #: (algorithm-improvements.md #1).
-    known_company: dict[str, str | None] = field(default_factory=dict)
+    #: domain rule key → (company that first sighting was taught against,
+    #: rule source) — the entity-consistency and machine-never-over-human
+    #: index the promotion guard consults (algorithm-improvements.md #1).
+    known_company: dict[str, tuple[str | None, str]] = field(default_factory=dict)
     negatives_learned: int = 0
     undecided_learned: int = 0
     promotions: int = 0
@@ -164,7 +164,7 @@ def _teach(
         if teach is not None:
             state.known[f"{teach.match_type}:{teach.value}"] = teach.verdict
             if teach.match_type == "domain" and not teach.promotion:
-                state.known_company[f"domain:{teach.value}"] = company_key
+                state.known_company[f"domain:{teach.value}"] = (company_key, "auto")
             if teach.promotion:
                 state.promotions += 1
             else:
@@ -232,7 +232,7 @@ def _policy_scoping_checks() -> list[str]:
         company_key="co-A",
         company_kind="employer",
         known={"domain:acme.example": "undecided"},
-        known_company={"domain:acme.example": "co-A"},
+        known_company={"domain:acme.example": ("co-A", "auto")},
     )
     if promote is None or not promote.promotion:
         failures.append(
@@ -243,7 +243,7 @@ def _policy_scoping_checks() -> list[str]:
         company_key="co-B",
         company_kind="employer",
         known={"domain:shared.example": "undecided"},
-        known_company={"domain:shared.example": "co-A"},
+        known_company={"domain:shared.example": ("co-A", "auto")},
     )
     if split is not None:
         failures.append(
@@ -254,10 +254,35 @@ def _policy_scoping_checks() -> list[str]:
         company_key="co-A",
         company_kind="agency",
         known={"domain:staffing.example": "undecided"},
-        known_company={"domain:staffing.example": "co-A"},
+        known_company={"domain:staffing.example": ("co-A", "auto")},
     )
     if agency is not None:
         failures.append("a recruiting-agency domain must never promote to positive")
+    # An `undecided` with no pinned company is a first-sighting-equivalent:
+    # one confident extraction is one datapoint, never agreement.
+    unpinned = learning.on_confident_positive(
+        company_domain="bare.example",
+        company_key="co-A",
+        company_kind="employer",
+        known={"domain:bare.example": "undecided"},
+        known_company={},
+    )
+    if unpinned is not None:
+        failures.append(
+            "an undecided rule with no pinned company must not promote "
+            "on a single extraction"
+        )
+    # The machine-never-over-human contract (AGENTS.md): a human-taught
+    # `undecided` is a standing human decision, not a promotion candidate.
+    human = learning.on_confident_positive(
+        company_domain="held.example",
+        company_key="co-A",
+        company_kind="employer",
+        known={"domain:held.example": "undecided"},
+        known_company={"domain:held.example": ("co-A", "human")},
+    )
+    if human is not None:
+        failures.append("a human-sourced rule must never be auto-promoted")
     return failures
 
 
