@@ -205,8 +205,10 @@ class ClassifyResult:
     #: no extractor call at all. See `_one`'s thread-carry-forward branch.
     carried_forward: int = 0
     llm_calls: int = 0
-    #: Of `llm_calls`, how many got a second, bigger-model opinion because
-    #: the first was ambiguous — see `classify_pending`'s `escalation_llm`.
+    #: Of `llm_calls`, how many got a second, bigger-model opinion — because
+    #: the first was ambiguous, or because a confident cheap-model negative
+    #: was about to teach a NEW domain-wide negative rule and the teach
+    #: needs the escalation model's agreement first (see `_apply_one`).
     #: Zero whenever no escalation model was configured.
     escalated: int = 0
     not_job_related: int = 0
@@ -228,8 +230,10 @@ class ClassifyResult:
     #: have dropped through the model, the model said positive, and the rule
     #: was wrong.
     rules_demoted: int = 0
-    #: Messages a learned NEGATIVE rule would have dropped that were instead
-    #: routed through the model to re-check the rule still holds.
+    #: Messages the negative tier would have dropped that were instead
+    #: routed through the model: a learned NEGATIVE rule being re-checked,
+    #: or a label/bulk-header-only negative sampled by sender domain so the
+    #: sender can earn its first rule at all (see `_prepare_one`).
     explored: int = 0
     #: Messages that looked terminal (offer/rejection/onboarding in the
     #: subject or body) and were routed straight to the escalation model
@@ -666,9 +670,30 @@ def _prepare_one(
             repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
             return None
     elif verdict.status == "negative":
-        out.filtered_out += 1
-        repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
-        return None
+        # Label/bulk-header-only negative — no learned rule matched. Without
+        # its own exploration escape this tier is a dead end on cold start:
+        # Gmail files a greenhouse/job-alert sender under
+        # CATEGORY_PROMOTIONS, no model ever reads it, and the sender can
+        # never earn the protective first-sighting `undecided` rule
+        # `learning.py` promises (the rule-based branch above requires a
+        # matched rule). Same deterministic 2% budget, keyed by sender
+        # domain under a "labels" pseudo-rule so the sample is stable per
+        # (domain, message). An explored message falls through to the model
+        # like rule-based exploration; a confident positive then teaches
+        # the normal first-sighting rule via `_record`. No demotion applies
+        # — there is no rule to demote.
+        explore_decision = exploration.should_explore_negative(
+            "labels", prefilter.domain_of(sender), message.id
+        )
+        if explore_decision.explore:
+            explored = True
+            out.explored += 1
+        else:
+            out.filtered_out += 1
+            repos.messages.mark_classified(
+                message.id, f"prefilter:{verdict.status}"
+            )
+            return None
 
     # Zero-cost carry: a resolved thread or a human/auto-confirmed positive
     # rule already settled the company — no extractor call at all.
@@ -822,12 +847,50 @@ def _apply_one(
     if job.verdict_status == "positive" and job.known_contact and extraction.is_negative:
         extraction = replace(extraction, label="unclassified")
 
+    extractor = job.extractor
     if extraction.is_negative:
-        out.not_job_related += 1
-        _teach_negative(job.sender, known=known, repos=repos, out=out)
-        repos.messages.mark_classified(message.id, job.extractor.name)
-        repos.reviews.resolve_by_message(message.id)
-        return
+        # A NEW domain-wide negative rule from one cheap-model verdict is
+        # the top failure mode with the whole employer domain as blast
+        # radius: a single flash-model false negative on careers@acme.com
+        # would silence acme.com until the 2% exploration hash lands (~50
+        # hidden messages in expectation). So a first-time *domain* teach
+        # requires the escalation model to also read the same rendered
+        # message as negative. Address rules (blast radius: one
+        # correspondent) and re-teaches (`on_model_negative` returns None
+        # when any rule covers the sender) still teach immediately, and
+        # with no escalation model configured behavior is unchanged.
+        teach = _pending_negative_teach(job.sender, known=known)
+        confirm_domain_teach = (
+            teach is not None
+            and teach.match_type == "domain"
+            and escalation_llm is not None
+            and extractor is llm
+        )
+        if not confirm_domain_teach:
+            out.not_job_related += 1
+            _teach_negative(job.sender, known=known, repos=repos, out=out)
+            repos.messages.mark_classified(message.id, extractor.name)
+            repos.reviews.resolve_by_message(message.id)
+            return
+        confirm_payload = escalation_llm.extract(
+            job.escalate_prompt, EXTRACTION_SCHEMA, text=job.escalate_rendered
+        )
+        out.escalated += 1
+        confirmed = from_payload(confirm_payload)
+        if confirmed.is_negative:
+            out.not_job_related += 1
+            _teach_negative(job.sender, known=known, repos=repos, out=out)
+            repos.messages.mark_classified(message.id, extractor.name)
+            repos.reviews.resolve_by_message(message.id)
+            return
+        # Disagreement or a punt: no rule is taught — only the rule was
+        # gated. The message itself follows the escalation verdict through
+        # the normal flow below (record, or queue for a human). Replacing
+        # `extractor` also keeps the second-opinion block from paying for
+        # a third read.
+        extraction = confirmed
+        payload = confirm_payload
+        extractor = escalation_llm
 
     ambiguous = not extraction.is_positive or not (
         extraction.names_a_company or job.agency_domain
@@ -835,7 +898,6 @@ def _apply_one(
 
     # Second opinion (#2), only when the first was genuinely unsure and not
     # already the escalation model.
-    extractor = job.extractor
     if ambiguous and escalation_llm is not None and extractor is llm:
         escalated_payload = escalation_llm.extract(
             job.escalate_prompt, EXTRACTION_SCHEMA, text=job.escalate_rendered
@@ -1422,6 +1484,21 @@ def _known_contact(
     return False
 
 
+def _pending_negative_teach(
+    sender: str, *, known: dict[str, str]
+) -> learning.Teach | None:
+    """What `learning.on_model_negative` would teach for this sender — or
+    None (unparseable sender, or a covering rule already stands). Split out
+    so `_apply_one` can see the prospective rule's *scope* before teaching:
+    a NEW domain-wide negative needs a second opinion first."""
+    from email.utils import getaddresses
+
+    addresses = [a for _, a in getaddresses([sender]) if a]
+    if not addresses:
+        return None
+    return learning.on_model_negative(sender_address=addresses[0], known=known)
+
+
 def _teach_negative(
     sender: str,
     *,
@@ -1436,12 +1513,7 @@ def _teach_negative(
     sender in one call. The policy scopes the rule (domain vs address, see
     `learning.py`) and refuses to touch senders any rule already covers.
     """
-    from email.utils import getaddresses
-
-    addresses = [a for _, a in getaddresses([sender]) if a]
-    if not addresses:
-        return
-    teach = learning.on_model_negative(sender_address=addresses[0], known=known)
+    teach = _pending_negative_teach(sender, known=known)
     if teach is None:
         return
     repos.sender_rules.add(

@@ -6,7 +6,11 @@ their careers domain; a dead bank domain is reused by a startup.
 
 This module provides an exploration budget — route a small fraction (2%) of
 messages a negative rule would drop through the model anyway. If any come back
-positive, the caller demotes the rule and the mail enters the record.
+positive, the caller demotes the rule and the mail enters the record. The same
+budget covers Gmail-label/bulk-header negatives that matched no rule at all
+(keyed by sender domain under a "labels" pseudo-rule): there is nothing to
+demote, but a positive read lets the sender earn its first `undecided` rule
+instead of staying invisible forever.
 
 The decision is **deterministic per (rule, message)** — a hash, not a coin
 flip — so re-deriving the record (I3) reproduces the same exploration sample
@@ -40,7 +44,11 @@ class ExplorationDecision:
     """
 
     explore: bool
-    rule_key: str  # "domain:example.com" or "address:user@example.com"
+    #: "domain:example.com", "address:user@example.com", or the pseudo-rule
+    #: "labels:example.com" — a label/bulk-header-only negative has no rule
+    #: row, so the sender's domain stands in as the stable sampling key
+    #: (see classify's `_prepare_one`; nothing exists to demote there).
+    rule_key: str
 
 
 def should_explore_negative(
