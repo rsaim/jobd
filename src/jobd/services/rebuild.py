@@ -232,6 +232,11 @@ def _accumulate(total: ClassifyResult, batch: ClassifyResult) -> None:
         "applications_created",
         "stage_events",
         "rules_learned",
+        "rules_demoted",
+        "explored",
+        "terminal_routed",
+        "stage_conflicts",
+        "thread_llm_reused",
     ):
         setattr(total, name, getattr(total, name) + getattr(batch, name))
     total.errors.extend(batch.errors)

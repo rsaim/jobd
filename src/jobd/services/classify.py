@@ -265,6 +265,7 @@ def classify_pending(
     escalation_llm: LLMProvider | None = None,
     triage_llm: LLMProvider | None = None,
     fetch_workers: int = 32,
+    llm_workers: int = 1,
     partition: tuple[int, int] | None = None,
     meter: Any = None,
 ) -> ClassifyResult:
@@ -355,13 +356,13 @@ def classify_pending(
                 repos.messages.mark_classified(message.id, f"triage:{triage_llm.name}")
         conn.commit()
 
-    # One commit for the whole batch, not one per message — the WAL fsync
-    # per commit was real, serialized cost on top of every write. Per-message
-    # isolation still holds: `conn.transaction()` opens a SAVEPOINT (psycopg
-    # does this automatically when already inside a transaction), so one bad
-    # message rolls back only its own writes and the loop carries on inside
-    # the same outer transaction. A crash mid-batch loses at most this batch
-    # — cheap, since re-deriving it is exactly what I3 promises.
+    # Three phases, mirroring `sweep_review_queue`'s proven split. Phase 1
+    # (sequential) runs the free tiers and plans the model calls; phase 2
+    # (parallel) makes them; phase 3 (sequential) applies them. The LLM call
+    # is the one thing worth parallelising — DB writes and the learning
+    # policy's in-memory state stay on this thread, because a psycopg
+    # connection is not thread-safe and `known`/`known_company` must not race.
+    jobs: list[_Job] = []
     for message in messages:
         result.seen += 1
         if message.id in triage_skip_ids:
@@ -374,7 +375,7 @@ def classify_pending(
             if isinstance(raw, Exception):
                 raise raw
             with conn.transaction():
-                _one(
+                job = _prepare_one(
                     message,
                     raw=raw,
                     llm=llm,
@@ -382,10 +383,11 @@ def classify_pending(
                     rules=rules,
                     known=known,
                     known_company=known_company,
-                    embed=embed,
                     out=result,
                     escalation_llm=escalation_llm,
                 )
+            if job is not None:
+                jobs.append(job)
         except Exception as exc:  # one bad message must not cost the batch
             result.errors.append(f"{message.storage_key}: {type(exc).__name__}: {exc}")
             meter.error(f"{message.storage_key}: {type(exc).__name__}: {exc}")
@@ -394,11 +396,50 @@ def classify_pending(
             # Concurrent partitions write shared rows — the company table,
             # and thread siblings that live in another slice. A batch-long
             # transaction holds those row locks for minutes and serializes
-            # every other partition behind it (live-caught: 169s
-            # `transactionid` waits, eight workers advancing at single-worker
-            # speed). Per-message commits trade WAL fsyncs for lock hold
-            # times in the milliseconds; the fsync cost only matters in the
-            # single-process case, which keeps the batch commit below.
+            # every other partition behind it. Per-message commits trade WAL
+            # fsyncs for lock hold times in the milliseconds.
+            conn.commit()
+
+    # Phase 2 — the model calls, concurrently. Counters are NOT bumped here:
+    # `_prepare_one` already accounted `llm_calls`/`thread_llm_reused`, and
+    # the apply phase owns the rest, so nothing races on the shared result.
+    def _ask(job: _Job) -> tuple[_Job, dict[str, Any] | Exception]:
+        if job.precomputed is not None:
+            return job, job.precomputed
+        try:
+            return job, job.extractor.extract(job.prompt, job.schema, text=job.rendered)
+        except Exception as exc:  # scored as an error in the apply phase
+            return job, exc
+
+    if llm_workers > 1 and len(jobs) > 1:
+        with ThreadPoolExecutor(max_workers=llm_workers) as pool:
+            answered = list(pool.map(_ask, jobs))
+    else:
+        answered = [_ask(j) for j in jobs]
+
+    # Phase 3 — apply, sequential: record, teach, escalate, queue. Every write
+    # happens here, one message at a time, so the learning policy's in-memory
+    # state advances deterministically.
+    for job, payload in answered:
+        try:
+            with conn.transaction():
+                _apply_one(
+                    job,
+                    payload,
+                    llm=llm,
+                    repos=repos,
+                    known=known,
+                    known_company=known_company,
+                    embed=embed,
+                    out=result,
+                    escalation_llm=escalation_llm,
+                )
+        except Exception as exc:  # one bad message must not cost the batch
+            result.errors.append(
+                f"{job.message.storage_key}: {type(exc).__name__}: {exc}"
+            )
+            meter.error(f"{job.message.storage_key}: {type(exc).__name__}: {exc}")
+        if partition is not None:
             conn.commit()
     conn.commit()
     meter.flush(force=True)
@@ -507,65 +548,37 @@ def _prefetch(
 _THREAD_BODY_CAP = 15_000
 
 
-def _thread_llm_payload(
-    llm: LLMProvider,
-    repos: Repositories,
-    *,
-    thread_id: str,
-    rules_context: str = "",
-    fallback_prompt: str,
-    fallback_rendered: str,
-) -> tuple[dict[str, Any], bool]:
-    """One paid model call per thread, ever. Returns (payload, reused).
+@dataclass(slots=True)
+class _Job:
+    """One message's planned model call — produced by the sequential prepare
+    phase, answered by the parallel extract phase, applied by the sequential
+    apply phase. Carries everything `_apply_one` needs that `_prepare_one`
+    already computed, so the two halves never recompute envelope facts."""
 
-    The thread's stored reading answers first — a conversation the model has
-    already read is never sent again. On a miss, the thread's latest stored
-    message (which quotes everything before it) is rendered with its full
-    envelope metadata plus three thread-level header lines, read once under
-    `THREAD_PROMPT`, and the payload is upserted to `thread_extraction` so
-    every sibling — in this run, a partition worker's run, or the review
-    sweep — resolves from the row.
-
-    Two partition workers racing the same thread can each pay once; the
-    upsert makes that benign (last write wins), same as the thread-carry
-    race classify already tolerates. The single-message fallback only fires
-    when the thread has no stored body at all — possible mid-ingest, and
-    worth a working answer over a blank render.
-    """
-    stored = repos.messages.thread_extraction(thread_id)
-    if stored is not None:
-        return dict(stored["payload"]), True
-    latest = repos.messages.thread_latest(thread_id)
-    if latest is None:
-        return llm.extract(fallback_prompt, EXTRACTION_SCHEMA, text=fallback_rendered), False
-    rendered = render_thread_for_model(
-        sender=latest["sender"],
-        recipient=latest["recipients"],
-        subject=latest["subject"],
-        body=latest["body"][:_THREAD_BODY_CAP],
-        cc=latest["cc"],
-        reply_to=latest["reply_to"],
-        date=str(latest["sent_at"]) if latest["sent_at"] else None,
-        labels=latest["labels"],
-        thread_messages=latest["thread_messages"],
-        thread_senders=latest["thread_senders"],
-        first_date=latest["first_date"],
-    )
-    prompt = (rules_context + "\n" + THREAD_PROMPT) if rules_context else THREAD_PROMPT
-    payload = llm.extract(prompt, THREAD_EXTRACTION_SCHEMA, text=rendered)
-    repos.messages.save_thread_extraction(
-        thread_id,
-        latest_message_id=latest["id"],
-        covers_sent_at=latest["sent_at"],
-        model=llm.name,
-        payload=payload,
-        messages_covered=latest["thread_messages"],
-        reasoning=getattr(llm, "last_reasoning", None),
-    )
-    return payload, False
+    message: Message
+    text: str
+    sender: str
+    agency_domain: str | None
+    learned_rule: SenderRule | None
+    explored: bool
+    extractor: LLMProvider
+    #: The extract call's own inputs (thread-level or single-message).
+    prompt: str
+    rendered: str
+    schema: dict[str, Any]
+    #: A cached thread reading, when the model already read this thread.
+    precomputed: dict[str, Any] | None
+    #: Upserted after a fresh thread-level read succeeds.
+    save_thread: dict[str, Any] | None
+    known_contact: bool
+    verdict_status: str
+    #: The single-message prompt/render — the escalation call's inputs, kept
+    #: separate from the (possibly thread-level) extract inputs above.
+    escalate_prompt: str
+    escalate_rendered: str
 
 
-def _one(
+def _prepare_one(
     message: Message,
     *,
     raw: RawMessage,
@@ -574,19 +587,17 @@ def _one(
     rules: list[SenderRule],
     known: dict[str, str],
     known_company: dict[str, object],
-    embed: bool,
     out: ClassifyResult,
     escalation_llm: LLMProvider | None = None,
-) -> None:
+) -> _Job | None:
+    """The free tiers plus a plan for the model call, or None when the free
+    tiers settled the message on their own. Every DB write here happens inside
+    the caller's transaction; no model is called."""
     assert message.id is not None
     payload, raw_metadata = raw.payload, dict(raw.metadata)
     text = body_text(payload)
     # Skip the write when unchanged (I3: re-deriving is routine, so most
-    # `--reclassify` reruns see the same text they already stored). The
-    # column drives a generated tsvector, so an unconditional UPDATE here
-    # was paying full index maintenance on every message, every rerun, even
-    # when nothing about the derived text had changed — the actual cost
-    # behind a "just applying deterministic rules" batch feeling I/O-bound.
+    # `--reclassify` reruns see the same text they already stored).
     if message.body_text != text:
         repos.messages.set_body(message.id, text)
 
@@ -607,13 +618,6 @@ def _one(
     learned, learned_company_id, learned_category, learned_domain, learned_rule = (
         _match_rule(rules, sender, recipients)
     )
-    # The sender matched a RECRUITING_AGENCY-tagged rule: whatever company
-    # this message resolves to, that domain is the agency, not the employer
-    # — carried through to `_resolve_company`'s no-client fallback and
-    # `_record`'s secondary-link write, never into `extraction` itself (so
-    # it never gets auto-taught as a plain company domain — agency domains
-    # are in `resolve.GENERIC_DOMAINS`, which the learning policy refuses
-    # to teach as a company identity).
     agency_domain = (
         learned_domain
         if learned_category == prefilter.SenderCategory.RECRUITING_AGENCY
@@ -629,12 +633,6 @@ def _one(
         has_list_unsubscribe=_is_bulk(payload),
     )
     # Algorithm improvement #3: exploration budget for negative rules.
-    # A small fraction (2%) of messages a negative *learned rule* would drop
-    # are routed through the model anyway — if they come back positive, the
-    # rule is demoted to `undecided` for re-checking. This prevents the
-    # "silently hide real mail forever" failure mode when domains get
-    # re-purposed. Deterministic per (rule, message) — a hash, not a coin
-    # flip — so re-deriving the record (I3) reproduces the same exploration.
     explored = False
     if verdict.status == "negative" and learned == "negative" and learned_rule is not None:
         explore_decision = exploration.should_explore_negative(
@@ -643,27 +641,17 @@ def _one(
         if explore_decision.explore:
             explored = True
             out.explored += 1
-            # Fall through to the model instead of dropping: the model is
-            # about to be the first reader of this content since the rule was
-            # taught.
         else:
             out.filtered_out += 1
             repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
-            return
+            return None
     elif verdict.status == "negative":
-        # Negative from Gmail labels / bulk headers, not a learned rule —
-        # nothing to re-examine, drop as always.
         out.filtered_out += 1
         repos.messages.mark_classified(message.id, f"prefilter:{verdict.status}")
-        return
+        return None
 
-    # Zero-cost path: some other message in this exact conversation chain, or
-    # a human-confirmed rule about this sender's domain/address, already
-    # settled the company — so this one's company/application/contact are
-    # already known facts, not a guess an extractor would have to make from
-    # one message alone. No extractor call at all, of either kind. The 4th
-    # element is the secondary agency link, if the thread (or, for a fresh
-    # rule-carry, nothing yet) already established one.
+    # Zero-cost carry: a resolved thread or a human/auto-confirmed positive
+    # rule already settled the company — no extractor call at all.
     carried = thread_ctx or (
         (learned_company_id, None, None, None)
         if learned == "positive" and learned_company_id is not None
@@ -678,33 +666,19 @@ def _one(
             contact_id=contact_id,
         )
         if agency_company_id is not None:
-            repos.message_companies.link(
-                message.id, agency_company_id, role="agency"
-            )
+            repos.message_companies.link(message.id, agency_company_id, role="agency")
         out.carried_forward += 1
         out.recorded += 1
         by = f"thread-carry:{thread_id}" if thread_ctx else "rule-carry"
         repos.messages.mark_classified(message.id, by)
-        # A stale pending review item for this exact message — e.g. left
-        # over from before a rule/thread made it resolvable for free — is
-        # now moot. Closing it is what stops it lingering forever with
-        # extraction/reason text that no longer matches reality.
         repos.reviews.resolve_by_message(message.id)
-        return
+        return None
 
-    # Everything the free tiers (prefilter negative, thread/rule carry)
-    # could not settle goes to the model — the only reader of content.
     extractor = llm
     out.llm_calls += 1
 
-    # Algorithm improvement #7: cost-aware routing. A message that looks
-    # terminal — an offer, rejection, or onboarding thread — is the
-    # highest-stakes kind of row: a wrong label on it is the most visible
-    # error the record can make. Route those straight to the escalation model
-    # when one is configured, and let the cheap model keep the long tail. The
-    # heuristic errs toward spending the strong model: a false "terminal"
-    # match costs a few extra tokens on a non-terminal message, never a wrong
-    # record.
+    # Algorithm improvement #7: cost-aware routing — terminal mail goes
+    # straight to the escalation model.
     if escalation_llm is not None and _looks_terminal(message.subject, text):
         extractor = escalation_llm
         out.terminal_routed += 1
@@ -712,26 +686,15 @@ def _one(
     prompt = PROMPT
     rules_context = ""
     if verdict.status == "undecided":
-        # Few-shot context from prior confirmed decisions in the same
-        # category — see `learned_rules_context`'s docstring. Only for
-        # `undecided`: a `positive` message already skipped this branch via
-        # `carried` or arrives with its company already proven.
         section = "RECRUITING_AGENCY" if agency_domain else "Direct employers"
         rules_context = learned_rules_context(section)
         if rules_context:
             prompt = rules_context + "\n" + prompt
-        # Algorithm improvement #4: retrieval-augmented few-shot. For the
-        # messages the free tiers couldn't settle, retrieve the most-similar
-        # *already-resolved* messages by embedding and show them as concrete
-        # analogies — this is where the free tier's punt rate lives, and
-        # where a real example beats a general rule. Degrades to nothing when
-        # embeddings were never computed or the provider can't embed.
+        # Algorithm improvement #4: retrieval-augmented few-shot.
         similar = _similar_examples_context(llm, repos, text, k=3)
         if similar:
             prompt = similar + "\n" + prompt
 
-    # Built once, reused for the escalation call below too — same message,
-    # same rendering, only the model changes.
     rendered = render_for_model(
         sender=sender,
         recipient=recipients,
@@ -741,63 +704,120 @@ def _one(
         subject=message.subject or "",
         body=text,
     )
+    escalate_prompt = prompt
+    escalate_rendered = rendered
+
+    schema: dict[str, Any] = EXTRACTION_SCHEMA
+    precomputed: dict[str, Any] | None = None
+    save_thread: dict[str, Any] | None = None
     if extractor is llm and thread_id:
-        # The paid path goes thread-level: one call on the thread's latest
-        # message (which quotes the whole history) classifies every member,
-        # and the stored reading answers for siblings with no second call.
-        payload, reused = _thread_llm_payload(
-            llm,
-            repos,
-            thread_id=thread_id,
-            rules_context=rules_context,
-            fallback_prompt=prompt,
-            fallback_rendered=rendered,
-        )
-        if reused:
+        stored = repos.messages.thread_extraction(thread_id)
+        if stored is not None:
+            precomputed = dict(stored["payload"])
             out.llm_calls -= 1
             out.thread_llm_reused += 1
-    else:
-        payload = extractor.extract(prompt, EXTRACTION_SCHEMA, text=rendered)
+        else:
+            latest = repos.messages.thread_latest(thread_id)
+            if latest is not None:
+                rendered = render_thread_for_model(
+                    sender=latest["sender"],
+                    recipient=latest["recipients"],
+                    subject=latest["subject"],
+                    body=latest["body"][:_THREAD_BODY_CAP],
+                    cc=latest["cc"],
+                    reply_to=latest["reply_to"],
+                    date=str(latest["sent_at"]) if latest["sent_at"] else None,
+                    labels=latest["labels"],
+                    thread_messages=latest["thread_messages"],
+                    thread_senders=latest["thread_senders"],
+                    first_date=latest["first_date"],
+                )
+                prompt = (
+                    (rules_context + "\n" + THREAD_PROMPT)
+                    if rules_context
+                    else THREAD_PROMPT
+                )
+                schema = THREAD_EXTRACTION_SCHEMA
+                save_thread = {
+                    "thread_id": thread_id,
+                    "latest_message_id": latest["id"],
+                    "covers_sent_at": latest["sent_at"],
+                    "messages_covered": latest["thread_messages"],
+                }
+
+    return _Job(
+        message=message,
+        text=text,
+        sender=sender,
+        agency_domain=agency_domain,
+        learned_rule=learned_rule,
+        explored=explored,
+        extractor=extractor,
+        prompt=prompt,
+        rendered=rendered,
+        schema=schema,
+        precomputed=precomputed,
+        save_thread=save_thread,
+        known_contact=known_contact,
+        verdict_status=verdict.status,
+        escalate_prompt=escalate_prompt,
+        escalate_rendered=escalate_rendered,
+    )
+
+
+def _apply_one(
+    job: _Job,
+    payload: dict[str, Any] | Exception,
+    *,
+    llm: LLMProvider,
+    repos: Repositories,
+    known: dict[str, str],
+    known_company: dict[str, object],
+    embed: bool,
+    out: ClassifyResult,
+    escalation_llm: LLMProvider | None = None,
+) -> None:
+    """Apply one model reading. Raises on a failed extract — the caller records
+    the error. Every DB write here happens inside the caller's transaction."""
+    message = job.message
+    assert message.id is not None
+    if isinstance(payload, Exception):
+        raise payload
+
+    if job.save_thread is not None:
+        st = job.save_thread
+        repos.messages.save_thread_extraction(
+            st["thread_id"],
+            latest_message_id=st["latest_message_id"],
+            covers_sent_at=st["covers_sent_at"],
+            model=job.extractor.name,
+            payload=payload,
+            messages_covered=st["messages_covered"],
+            reasoning=getattr(job.extractor, "last_reasoning", None),
+        )
+
     extraction = from_payload(payload)
 
-    if verdict.status == "positive" and known_contact and extraction.is_negative:
-        # known_contact is a *proven* fact from an earlier confident
-        # classification, not this extractor's guess about this one message —
-        # a reply that is all "Tuesday works, see you then" carries no
-        # signal a model can anchor on and would otherwise be silently
-        # mislabeled negative. The override promotes to "unclassified", not
-        # "positive": the domain is trusted, this one message's content
-        # still isn't, so it lands in review rather than skipping straight
-        # to the record.
+    if job.verdict_status == "positive" and job.known_contact and extraction.is_negative:
         extraction = replace(extraction, label="unclassified")
 
     if extraction.is_negative:
         out.not_job_related += 1
-        _teach_negative(sender, known=known, repos=repos, out=out)
-        repos.messages.mark_classified(message.id, extractor.name)
+        _teach_negative(job.sender, known=known, repos=repos, out=out)
+        repos.messages.mark_classified(message.id, job.extractor.name)
         repos.reviews.resolve_by_message(message.id)
         return
 
-    # `agency_domain` widens `names_a_company`: an agency sender that names
-    # no specific client still has a real entity to resolve to (the agency
-    # itself, see `_resolve_company`'s fallback) — without this, that mail
-    # sits in review_queue forever with no path out, exactly the gap this
-    # session's online learning is meant to close.
     ambiguous = not extraction.is_positive or not (
-        extraction.names_a_company or agency_domain
+        extraction.names_a_company or job.agency_domain
     )
 
-    # Second opinion from a bigger model, only when the first one was
-    # genuinely unsure — this is the expensive path, spent only on the
-    # messages that need it. A model that punts twice stays punted; this
-    # is a second read, not a tiebreak vote, so its answer (including a
-    # second "unclassified") replaces the first one outright. `extractor is
-    # llm` guards the terminal-routing case (algorithm-improvements.md #7):
-    # a message already handed to the strong model has no second opinion left
-    # to buy.
+    # Second opinion (#2), only when the first was genuinely unsure and not
+    # already the escalation model.
+    extractor = job.extractor
     if ambiguous and escalation_llm is not None and extractor is llm:
         escalated_payload = escalation_llm.extract(
-            prompt, EXTRACTION_SCHEMA, text=rendered
+            job.escalate_prompt, EXTRACTION_SCHEMA, text=job.escalate_rendered
         )
         extraction = from_payload(escalated_payload)
         payload = escalated_payload
@@ -805,32 +825,27 @@ def _one(
         out.escalated += 1
         if extraction.is_negative:
             out.not_job_related += 1
-            _teach_negative(sender, known=known, repos=repos, out=out)
+            _teach_negative(job.sender, known=known, repos=repos, out=out)
             repos.messages.mark_classified(message.id, extractor.name)
             repos.reviews.resolve_by_message(message.id)
             return
         ambiguous = not extraction.is_positive or not (
-            extraction.names_a_company or agency_domain
+            extraction.names_a_company or job.agency_domain
         )
 
-    # Exploration finding (algorithm-improvements.md #3): this message was
-    # about to be dropped by a negative rule, was instead routed through the
-    # model, and the model did NOT confirm the rule — it read positive. The
-    # rule is stale. Demote it to `undecided` (never to `positive` — that
-    # stays a human's call) so future mail from it reaches the model instead
-    # of being silently hidden. Human rules are left untouched: a
-    # disagreement with a human decision is surfaced, not auto-flipped.
-    if explored and not extraction.is_negative and learned_rule is not None:
-        if learned_rule.source != "human":
+    # Exploration finding (#3): the model did not confirm a negative rule it
+    # was re-checking — demote the stale rule to `undecided`.
+    if job.explored and not extraction.is_negative and job.learned_rule is not None:
+        if job.learned_rule.source != "human":
             repos.sender_rules.add(
                 SenderRule(
-                    match_type=learned_rule.match_type,
-                    value=learned_rule.value,
+                    match_type=job.learned_rule.match_type,
+                    value=job.learned_rule.value,
                     verdict="undecided",
                     source="auto",
                 )
             )
-            known[f"{learned_rule.match_type}:{learned_rule.value}"] = "undecided"
+            known[f"{job.learned_rule.match_type}:{job.learned_rule.value}"] = "undecided"
             out.rules_demoted += 1
 
     if ambiguous:
@@ -855,12 +870,12 @@ def _one(
         repos=repos,
         known=known,
         known_company=known_company,
-        agency_domain=agency_domain,
+        agency_domain=job.agency_domain,
         out=out,
     )
 
     if embed:
-        vector = llm.embed([text[:2000]])[0]
+        vector = llm.embed([job.text[:2000]])[0]
         repos.messages.set_embedding(message.id, vector)
 
     out.recorded += 1

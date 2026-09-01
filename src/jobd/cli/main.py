@@ -682,6 +682,14 @@ def _llm(model: str) -> Any:
     "bandwidth, or lower for a constrained one.",
 )
 @click.option(
+    "--llm-workers",
+    default=8,
+    show_default=True,
+    help="Concurrent LLM extraction calls per batch. The model call is the "
+    "long pole (a network round trip), so a small pool multiplies classify "
+    "throughput; DB writes and the learning policy stay sequential regardless.",
+)
+@click.option(
     "--partition",
     default=None,
     help="k/N — process only the k-th of N disjoint hash slices of the "
@@ -698,6 +706,7 @@ def classify(
     bucket: str | None,
     local_store: Path | None,
     workers: int,
+    llm_workers: int,
     partition: str | None,
 ) -> None:
     """Turn stored messages into an evidence-linked record.
@@ -783,6 +792,7 @@ def classify(
                     limit=limit,
                     embed=embed,
                     fetch_workers=workers,
+                    llm_workers=llm_workers,
                     partition=slice_of,
                     meter=meter,
                 )
