@@ -409,6 +409,11 @@ def classify_pending(
         try:
             return job, job.extractor.extract(job.prompt, job.schema, text=job.rendered)
         except Exception as exc:  # scored as an error in the apply phase
+            if _is_fatal_llm_error(exc):
+                # A dead key / exhausted quota / revoked auth is not a
+                # per-message problem — retrying the other 50k messages against
+                # it is an infinite loop, not progress. Abort the run.
+                raise
             return job, exc
 
     if llm_workers > 1 and len(jobs) > 1:
@@ -1509,6 +1514,29 @@ _TERMINAL_TERMS = (
 def _looks_terminal(subject: str | None, text: str) -> bool:
     haystack = f"{subject or ''} {text or ''}".lower()
     return any(term in haystack for term in _TERMINAL_TERMS)
+
+
+#: Substrings of an LLM-provider error that mean "the whole run is doomed",
+#: not "this one message failed". A dead key, an exhausted quota, a revoked
+#: credential, or a hard rate limit cannot be fixed by retrying the other 50k
+#: messages — continuing would just turn one failure into a loop. These abort
+#: the run so the operator sees a clear failure instead of a spinning batch.
+_FATAL_LLM_MARKERS = (
+    "limit exceeded",
+    "rate limit",
+    "quota",
+    "auth",
+    "unauthorized",
+    "forbidden",
+    "insufficient",
+    "no cookie",
+    "credits",
+)
+
+
+def _is_fatal_llm_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _FATAL_LLM_MARKERS)
 
 
 def _similar_examples_context(
