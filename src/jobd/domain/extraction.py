@@ -8,7 +8,7 @@ change what a `StageEvent` can say.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from jobd.domain.record import Stage
@@ -330,6 +330,16 @@ def from_payload(payload: dict[str, Any]) -> Extraction:
             parsed_at = datetime.fromisoformat(occurred.strip())
         except ValueError:
             parsed_at = None
+        # Models write bare dates ("2026-03-04") — offset-naive. Everything
+        # this is later compared against (message `sent_at`, timestamptz
+        # rows: the stage-monotonicity guard, `applications.close`,
+        # `pick_application` windows) is UTC-aware, and a naive-vs-aware
+        # comparison raises TypeError — the message then errors out of every
+        # batch forever, re-paying the model each time. Pin naive readings
+        # to UTC at the one parse site so every consumer sees a comparable
+        # datetime.
+        if parsed_at is not None and parsed_at.tzinfo is None:
+            parsed_at = parsed_at.replace(tzinfo=UTC)
 
     label = payload.get("label")
     if label not in Label:

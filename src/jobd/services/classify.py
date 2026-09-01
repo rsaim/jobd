@@ -35,6 +35,7 @@ into a timeline that never happened.
 
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
@@ -414,13 +415,11 @@ def classify_pending(
     # Phase 2 — the model calls, concurrently. Counters are NOT bumped here:
     # `_prepare_one` already accounted `llm_calls`/`thread_llm_reused`, and
     # the apply phase owns the rest, so nothing races on the shared result.
-    def _ask(job: _Job) -> tuple[_Job, dict[str, Any] | Exception]:
-        if job.precomputed is not None:
-            return job, job.precomputed
+    def _call(job: _Job) -> dict[str, Any] | Exception:
         last_exc: Exception | None = None
         for attempt in range(_TRANSIENT_RETRIES):
             try:
-                return job, job.extractor.extract(job.prompt, job.schema, text=job.rendered)
+                return job.extractor.extract(job.prompt, job.schema, text=job.rendered)
             except Exception as exc:  # scored as an error in the apply phase
                 last_exc = exc
                 if _is_fatal_llm_error(exc):
@@ -432,7 +431,37 @@ def classify_pending(
                 # retry a bounded number of times, then let the apply phase
                 # score it as a per-message error.
                 time.sleep(_TRANSIENT_BACKOFF * (attempt + 1))
-        return job, last_exc  # type: ignore[return-value]
+        return last_exc  # type: ignore[return-value]
+
+    # One paid thread call per *batch* — the in-batch face of the one-call-
+    # per-thread invariant. Siblings of the same thread all miss the stored
+    # cache in phase 1 (it is only saved in phase 3), so without this the
+    # pool would make N identical paid thread-level calls. A per-thread lock
+    # serialises siblings: the first worker in pays, the rest block on the
+    # lock and reuse its reading. Failures are not memoised — a sibling
+    # after a failed call makes its own attempt, degrading exactly as the
+    # unshared path did.
+    thread_locks: dict[str, threading.Lock] = {}
+    thread_readings: dict[str, dict[str, Any]] = {}
+    locks_guard = threading.Lock()
+
+    def _ask(job: _Job) -> tuple[_Job, dict[str, Any] | Exception]:
+        if job.precomputed is not None:
+            return job, job.precomputed
+        if job.save_thread is None:
+            return job, _call(job)
+        key = job.save_thread["thread_id"]
+        with locks_guard:
+            lock = thread_locks.setdefault(key, threading.Lock())
+        with lock:
+            cached = thread_readings.get(key)
+            if cached is not None:
+                job.reused_in_batch = True
+                return job, dict(cached)
+            answer = _call(job)
+            if not isinstance(answer, Exception):
+                thread_readings[key] = answer
+            return job, answer
 
     if llm_workers > 1 and len(jobs) > 1:
         with ThreadPoolExecutor(max_workers=llm_workers) as pool:
@@ -600,6 +629,11 @@ class _Job:
     #: separate from the (possibly thread-level) extract inputs above.
     escalate_prompt: str
     escalate_rendered: str
+    #: Set by the extract phase when a sibling's in-batch thread reading
+    #: answered instead of a paid call. The apply phase (sequential, so
+    #: counters don't race) folds these into `thread_llm_reused` and skips
+    #: the redundant `save_thread` upsert — the payer already saved.
+    reused_in_batch: bool = False
 
 
 def _prepare_one(
@@ -755,7 +789,13 @@ def _prepare_one(
     schema: dict[str, Any] = EXTRACTION_SCHEMA
     precomputed: dict[str, Any] | None = None
     save_thread: dict[str, Any] | None = None
-    if extractor is llm and thread_id:
+    # Both extractors participate in the thread cache: a stored reading
+    # answers for any sibling no matter which model wrote it (the row's
+    # `model` column records the author), and a terminal-routed escalation
+    # read is stored the same way. Offer/rejection threads are exactly where
+    # messages cluster, so exempting the escalation model from the cache
+    # would re-pay the most expensive calls per sibling.
+    if thread_id:
         stored = repos.messages.thread_extraction(thread_id)
         if stored is not None:
             precomputed = dict(stored["payload"])
@@ -830,7 +870,14 @@ def _apply_one(
     if isinstance(payload, Exception):
         raise payload
 
-    if job.save_thread is not None:
+    if job.reused_in_batch:
+        # In-batch sibling reuse, accounted here rather than in the parallel
+        # phase so the shared counters never race. `_prepare_one` charged
+        # this job an `llm_calls`; the batch payer's reading answered it.
+        out.llm_calls -= 1
+        out.thread_llm_reused += 1
+
+    if job.save_thread is not None and not job.reused_in_batch:
         st = job.save_thread
         repos.messages.save_thread_extraction(
             st["thread_id"],
