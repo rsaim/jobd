@@ -15,6 +15,7 @@ call) is upheld upstream regardless of provider.
 """
 
 import os
+from typing import Any
 
 from jobd.adapters.llm.ollama import OllamaProvider
 
@@ -32,6 +33,7 @@ def load_provider(
     *,
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
+    credit_guard: object | None = None,
 ) -> object:
     """Resolve a provider by name. `litellm` is imported lazily and may fail.
 
@@ -47,6 +49,9 @@ def load_provider(
             top of that has genuinely truncated a real response mid-string
             (`json.JSONDecodeError: Unterminated string`) — found live, not
             guessed at.
+        credit_guard: Optional CreditGuard attached to cloud providers — every
+            paid call is gated before and settled after (balance floor + run
+            budget). Ignored for `ollama`, which makes no paid call.
     """
     if name in {"", "default"}:
         name = os.environ.get("JOBD_MODEL", "") or DEFAULT_MODEL
@@ -63,9 +68,11 @@ def load_provider(
 
     from jobd.adapters.llm.litellm_provider import LiteLLMProvider
 
-    kwargs: dict[str, object] = {}
+    kwargs: dict[str, Any] = {}
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
+    if credit_guard is not None:
+        kwargs["credit_guard"] = credit_guard
     return LiteLLMProvider(model=name, **kwargs)

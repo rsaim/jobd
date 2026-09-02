@@ -48,9 +48,16 @@ class LiteLLMProvider:
         max_tokens: int = 2048,
         num_retries: int = 0,
         reasoning_effort: str | None = None,
+        credit_guard: Any = None,
     ) -> None:
         self._model = model
         self._embed_model = embed_model
+        #: Optional CreditGuard. When set, every paid call (`extract`,
+        #: `embed`) is gated by `before_call` and settled by `after_call` —
+        #: the balance floor and run budget are enforced per-call, not
+        #: per-batch. None (local runs, or a caller that wired no guard)
+        #: leaves behaviour unchanged.
+        self._credit_guard = credit_guard
         #: Cumulative usage across every `extract` call this instance made —
         #: the scrape run's live tokens/cost metrics read these. Plain
         #: counters, no reset: one provider instance is one run's scope.
@@ -112,6 +119,9 @@ class LiteLLMProvider:
         reproduce the record, or I3's "improve a prompt and re-derive the world"
         turns into "get a different world each time".
         """
+        guard = self._credit_guard
+        if guard is not None:
+            guard.before_call()
         response = self._litellm().completion(
             model=self._model,
             messages=[
@@ -160,14 +170,20 @@ class LiteLLMProvider:
         if usage is not None:
             self.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
             self.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+        call_cost = 0.0
         try:
-            self.cost_usd += float(self._litellm().completion_cost(response) or 0.0)
+            call_cost = float(self._litellm().completion_cost(response) or 0.0)
         except Exception:
+            call_cost = 0.0
+        if call_cost <= 0.0 and usage is not None:
             # LiteLLM's cost table doesn't cover every gateway-routed model
-            # id (openrouter/google/gemini-2.5-flash-lite, e.g.). Fall back
-            # to operator-set $/Mtok knobs so the dashboard's cost metric
-            # stays honest; without them, tokens still count and cost is a
-            # lower bound.
+            # id (openrouter/google/gemini-2.5-flash-lite, and any model newer
+            # than the installed litellm — deepseek-v4-flash-0731 among them).
+            # `completion_cost` returns 0 for an unknown model (or raises),
+            # which would zero the budget charge and let a run spend past its
+            # ceiling. Fall back to operator-set $/Mtok knobs so both the
+            # dashboard's cost metric and the CreditGuard budget stay honest;
+            # without them, tokens still count and cost is a lower bound.
             import os
 
             try:
@@ -175,13 +191,16 @@ class LiteLLMProvider:
                 price_out = float(os.environ.get("JOBD_PRICE_PER_MTOK_OUT", "0"))
             except ValueError:
                 price_in = price_out = 0.0
-            if usage is not None and (price_in or price_out):
-                self.cost_usd += (
+            if price_in or price_out:
+                call_cost = (
                     int(getattr(usage, "prompt_tokens", 0) or 0) / 1e6 * price_in
                     + int(getattr(usage, "completion_tokens", 0) or 0)
                     / 1e6
                     * price_out
                 )
+        self.cost_usd += call_cost
+        if guard is not None:
+            guard.after_call(call_cost)
         choice = response.choices[0]
         content = choice.message.content
         if not content:
@@ -213,7 +232,15 @@ class LiteLLMProvider:
         return parsed
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        guard = self._credit_guard
+        if guard is not None:
+            guard.before_call()
         response = self._litellm().embedding(model=self._embed_model, input=texts)
+        if guard is not None:
+            # Embedding cost is not tracked per-call (litellm's embedding
+            # response carries no cost on every gateway), so the budget is
+            # charged 0 here; the balance floor is still re-checked after.
+            guard.after_call(0.0)
         return [list(item["embedding"]) for item in response.data]
 
     def converse(

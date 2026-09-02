@@ -25,6 +25,27 @@ class ScrapeConfigError(RuntimeError):
     """The environment is missing something a run cannot start without."""
 
 
+def _credit_guard(models: list[str], budget: float | None) -> Any | None:
+    """Build (and preflight) the OpenRouter guard for a paid run, or None.
+
+    Mirrors the CLI's `_credit_guard`: a paid OpenRouter model requires a
+    budget (``JOBD_RUN_BUDGET`` or the ``budget`` arg), and the balance must
+    sit above the floor — both refused as a ``ScrapeConfigError`` before any
+    work, so a misconfigured run fails fast instead of halfway through.
+    """
+    from jobd.adapters.llm.credits import BudgetRequired, CreditsLow, CreditGuard
+
+    paid = [m for m in models if m.startswith("openrouter/") and ":free" not in m]
+    if not paid:
+        return None
+    guard = CreditGuard(budget=budget)
+    try:
+        guard.require()
+    except (BudgetRequired, CreditsLow) as exc:
+        raise ScrapeConfigError(str(exc)) from None
+    return guard
+
+
 def _storage(bucket: str | None, local_store: Path | None) -> Any:
     if local_store is None and os.environ.get("JOBD_LOCAL_STORE"):
         # Filesystem archive as the raw store — the no-cloud deployment, and
@@ -83,6 +104,7 @@ def run_scrape(
     local_store: Path | None = None,
     sink: Any = None,
     emitter: Emitter | None = None,
+    budget: float | None = None,
 ) -> dict[str, Any]:
     """Run the full seed-and-expand graph for one or more mailboxes.
 
@@ -98,6 +120,9 @@ def run_scrape(
             then the built-in default; ``ollama/<model>`` runs fully local;
             anything else goes through LiteLLM (needs its API key in the
             environment).
+        budget: Max dollars this run may spend on OpenRouter. None falls back
+            to ``JOBD_RUN_BUDGET``; a paid model with no budget is refused
+            before any work (same fail-fast as the raw-storage probe).
         sink: Optional callable receiving every :class:`Event` — the CLI's
             printer. The dashboard passes ``emitter`` instead and reads it
             from its SSE route.
@@ -123,6 +148,17 @@ def run_scrape(
     judge = (
         load_provider(judge_model, max_tokens=8192) if judge_model else None
     )
+    guard = _credit_guard([llm.name] + ([judge.name] if judge else []), budget)
+    if guard is not None:
+        # Rebuild with the guard attached, so every paid call is gated and
+        # settled per-call (balance floor + run budget). The first build only
+        # resolved the model id so the paid/free decision could be made.
+        llm = load_provider(model, credit_guard=guard)
+        judge = (
+            load_provider(judge_model, max_tokens=8192, credit_guard=guard)
+            if judge_model
+            else None
+        )
 
     storage = _storage(bucket or os.environ.get("JOBD_BUCKET"), local_store)
     probe_raw_storage(storage)

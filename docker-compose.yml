@@ -40,6 +40,12 @@ services:
       # Optional, for LLM extraction and the chat dock — the demo and the
       # rule-based pipeline never read it:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Per-token price for the extractor, $/Mtok. LiteLLM's price table
+      # predates some gateway models (deepseek-v4-flash-0731,
+      # gemini-2.5-flash-lite), so without these the dashboard cost and the
+      # CreditGuard run budget both read $0. Revisit if JOBD_MODEL changes.
+      JOBD_PRICE_PER_MTOK_IN: "0.10"
+      JOBD_PRICE_PER_MTOK_OUT: "0.40"
     volumes:
       - rawstore:/data
     ports:

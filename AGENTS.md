@@ -100,8 +100,11 @@ Design invariants an agent should preserve when extending this code:
 - Distilled rules are aggregates-only (no message content is ever re-sent)
   and can only be `negative`/`undecided`, never `positive` — a bad rule may
   widen the review queue, never silently record.
-- A `CreditGuard` preflights OpenRouter balance before spending; batch
-  boundaries stop gracefully when credits run low.
+- A `CreditGuard` gates *every* paid call: `before_call` checks the balance
+  floor and a run budget, `after_call` records the real billed cost and
+  re-checks. Every paid run must declare a budget (`--budget` /
+  `JOBD_RUN_BUDGET`) or it refuses to start; batch boundaries stop gracefully
+  when credits run low or the budget is spent.
 - Everything is idempotent: re-running scrape/ingest/classify over the same
   window is safe by construction (content-addressed storage, upserts).
 

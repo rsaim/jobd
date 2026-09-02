@@ -18,6 +18,7 @@ from uuid import UUID
 import click
 
 from jobd import __version__
+from jobd.adapters.llm.credits import GuardAbort
 from jobd.adapters.postgres import Migrator
 from jobd.config import load_settings
 
@@ -635,10 +636,33 @@ def _connect() -> Any:
     return psycopg.connect(settings.database_url)
 
 
-def _llm(model: str) -> Any:
+def _llm(model: str, *, credit_guard: Any = None) -> Any:
     from jobd.adapters.llm import load_provider
 
-    return load_provider(model)
+    return load_provider(model, credit_guard=credit_guard)
+
+
+def _credit_guard(models: list[str], budget: float | None) -> Any | None:
+    """Build (and preflight) the OpenRouter guard for a paid run, or None.
+
+    A run that routes any model through OpenRouter's paid tier must declare a
+    budget — :class:`CreditGuard.require` raises ``BudgetRequired`` otherwise.
+    Local runs (``ollama/...``) and OpenRouter's ``:free`` tier return None:
+    no credits move, so there is nothing to guard.
+    """
+    from jobd.adapters.llm.credits import BudgetRequired, CreditsLow, CreditGuard
+
+    paid = [m for m in models if m.startswith("openrouter/") and ":free" not in m]
+    if not paid:
+        return None
+    guard = CreditGuard(budget=budget)
+    try:
+        guard.require()
+    except BudgetRequired as exc:
+        raise click.ClickException(str(exc)) from None
+    except CreditsLow as exc:
+        raise click.ClickException(str(exc)) from None
+    return guard
 
 
 @main.command()
@@ -683,11 +707,12 @@ def _llm(model: str) -> Any:
 )
 @click.option(
     "--llm-workers",
-    default=8,
+    default=1,
     show_default=True,
-    help="Concurrent LLM extraction calls per batch. The model call is the "
-    "long pole (a network round trip), so a small pool multiplies classify "
-    "throughput; DB writes and the learning policy stay sequential regardless.",
+    help="Concurrent LLM extraction calls per batch. Sequential (1) is the "
+    "default: rate-limited cheap-tier models stall on parallel bursts, and "
+    "thread/rule carry already cut calls to the truly undecided residue. "
+    "Raise for a model with generous rate limits.",
 )
 @click.option(
     "--partition",
@@ -695,6 +720,14 @@ def _llm(model: str) -> Any:
     help="k/N — process only the k-th of N disjoint hash slices of the "
     "mailbox, so N classify processes run concurrently without racing. "
     "Launch one process per slice (k = 0..N-1).",
+)
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid "
+    "run; the run stops cleanly when it is spent.",
 )
 def classify(
     model: str,
@@ -708,6 +741,7 @@ def classify(
     workers: int,
     llm_workers: int,
     partition: str | None,
+    budget: float | None,
 ) -> None:
     """Turn stored messages into an evidence-linked record.
 
@@ -721,6 +755,7 @@ def classify(
     from jobd.services import ClassifyResult, classify_pending
     from jobd.services.classify import mirror_classify
     from jobd.services.rebuild import _accumulate
+    from jobd.adapters.llm.credits import BudgetExhausted, CreditsLow
 
     storage = _storage(bucket, local_store)
     slice_of: tuple[int, int] | None = None
@@ -736,21 +771,21 @@ def classify(
     esc_provider = _llm(escalation_model) if escalation_model else None
     totals = ClassifyResult()
 
-    from jobd.adapters.llm.credits import CreditGuard, CreditsLow
-
-    #: OpenRouter's `:free` tier spends no credits, so the balance floor must
-    #: not gate it — a $0 key is fine there. The rate limit is the gate, and
-    #: that surfaces as a fatal "limit exceeded" (or a transient 429 the
-    #: classifier retries), never as a credits check.
-    free_model = ":free" in provider.name
-    guard = CreditGuard()
-    if provider.name.startswith("openrouter/") and not free_model:
-        # Fail before burning anything — a 402 halfway through a mailbox is
-        # half a run's spend for nothing (live-caught on the first audit).
-        try:
-            guard.require()
-        except CreditsLow as exc:
-            raise click.ClickException(str(exc)) from None
+    #: One guard shared by every provider this run touches, so the budget is a
+    #: single ceiling across the extractor and the escalation model. OpenRouter's
+    #: `:free` tier spends no credits and returns no guard (see `_credit_guard`).
+    guard = _credit_guard(
+        [provider.name, esc_provider.name] if esc_provider else [provider.name],
+        budget,
+    )
+    if guard is not None:
+        # Rebuild the providers with the guard attached, so `before_call`/
+        # `after_call` gate every paid call. `_credit_guard` already preflighted
+        # the balance floor and required a budget (fail before burning anything).
+        provider = _llm(model, credit_guard=guard)
+        esc_provider = (
+            _llm(escalation_model, credit_guard=guard) if escalation_model else None
+        )
 
     with _connect() as conn:
         repos = _repos(conn)
@@ -803,7 +838,7 @@ def classify(
                 )
                 _accumulate(totals, batch)
                 mirror_classify(meter, totals)
-                if not free_model:
+                if guard is not None:
                     balance = guard.balance()
                     if balance is not None:
                         meter.set_counter("credits_left", round(balance, 2))
@@ -818,6 +853,16 @@ def classify(
                             err=True,
                         )
                         meter.finish("low-credits")
+                        break
+                    remaining = guard.remaining
+                    if remaining is not None and remaining <= 0:
+                        click.echo(
+                            f"stopping: OpenRouter budget spent "
+                            f"(${guard.spent:.2f} of ${guard.budget:.2f}) — "
+                            "resume after raising --budget/JOBD_RUN_BUDGET.",
+                            err=True,
+                        )
+                        meter.finish("budget-exhausted")
                         break
                 # No-progress guard: a batch that saw messages but settled none
                 # of them means every one errored — looping again would just
@@ -853,6 +898,12 @@ def classify(
                     )
                 if not run_all or batch.seen == 0:
                     break
+        except BudgetExhausted as exc:
+            meter.finish("budget-exhausted")
+            raise click.ClickException(str(exc)) from None
+        except CreditsLow as exc:
+            meter.finish("low-credits")
+            raise click.ClickException(str(exc)) from None
         except Exception:
             meter.finish("failed")
             raise
@@ -912,8 +963,15 @@ def classify(
     "--batch-size", default=100, show_default=True, help="Texts per embed() call."
 )
 @click.option("--all", "run_all", is_flag=True, help="Keep going until none remain.")
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
 def embed_backfill(
-    model: str | None, limit: int, batch_size: int, run_all: bool
+    model: str | None, limit: int, batch_size: int, run_all: bool, budget: float | None
 ) -> None:
     """Embed already-recorded messages that predate `classify --embed`.
 
@@ -933,18 +991,24 @@ def embed_backfill(
             "No model configured — pass --model or set JOBD_MODEL/JOBD_CHAT_MODEL."
         )
     provider = _llm(chosen)
+    guard = _credit_guard([provider.name], budget)
+    if guard is not None:
+        provider = _llm(chosen, credit_guard=guard)
     with _connect() as conn:
         repos = _repos(conn)
         total = 0
-        while True:
-            n = backfill_embeddings(
-                llm=provider, repos=repos, conn=conn, limit=limit, batch_size=batch_size
-            )
-            total += n
-            if run_all and n:
-                click.echo(f"...{total} embedded", err=True)
-            if not run_all or n == 0:
-                break
+        try:
+            while True:
+                n = backfill_embeddings(
+                    llm=provider, repos=repos, conn=conn, limit=limit, batch_size=batch_size
+                )
+                total += n
+                if run_all and n:
+                    click.echo(f"...{total} embedded", err=True)
+                if not run_all or n == 0:
+                    break
+        except GuardAbort as exc:
+            raise click.ClickException(str(exc)) from None
     click.echo(f"embedded {total} messages ({provider.name})")
 
 
@@ -1109,7 +1173,14 @@ def review_resolve(review_id: str, approve: bool) -> None:
     "readings are punts by definition, so a cache hit can only punt again; "
     "this pays for a second opinion and the upsert replaces the row.",
 )
-def review_sweep(model: str | None, limit: int, fresh: bool) -> None:
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
+def review_sweep(model: str | None, limit: int, fresh: bool, budget: float | None) -> None:
     """Re-judge the pending queue with the strong model and apply verdicts.
 
     The queue is exactly what the classify-time model punted on; a human
@@ -1120,19 +1191,16 @@ def review_sweep(model: str | None, limit: int, fresh: bool) -> None:
     """
     import os
 
+    from jobd.adapters.llm.credits import BudgetExhausted, CreditsLow
     from jobd.services.classify import sweep_review_queue
 
     model_id = model or os.environ.get("JOBD_JUDGE_MODEL")
     if not model_id:
         raise click.UsageError("Pass --model or set JOBD_JUDGE_MODEL.")
     judge = _llm(model_id)
-    if model_id.startswith("openrouter/"):
-        from jobd.adapters.llm.credits import CreditGuard, CreditsLow
-
-        try:
-            CreditGuard().require()
-        except CreditsLow as exc:
-            raise click.ClickException(str(exc)) from None
+    guard = _credit_guard([judge.name], budget)
+    if guard is not None:
+        judge = _llm(model_id, credit_guard=guard)
     from jobd.services.metrics import RunMeter
 
     meter = RunMeter.start(
@@ -1147,6 +1215,12 @@ def review_sweep(model: str | None, limit: int, fresh: bool) -> None:
                 judge=judge, repos=_repos(conn), conn=conn, limit=limit,
                 fresh=fresh, meter=meter,
             )
+        except BudgetExhausted as exc:
+            meter.finish("budget-exhausted")
+            raise click.ClickException(str(exc)) from None
+        except CreditsLow as exc:
+            meter.finish("low-credits")
+            raise click.ClickException(str(exc)) from None
         except Exception:
             meter.finish("failed")
             raise
@@ -1328,6 +1402,13 @@ def dedupe(limit: int) -> None:
     "and the company row itself is deleted. When it IS job-related but the "
     "name/kind differ from what's on record, those are corrected instead.",
 )
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
 def verify(
     model: str,
     limit: int,
@@ -1335,6 +1416,7 @@ def verify(
     reverify: bool,
     concurrency: int,
     do_apply: bool,
+    budget: float | None,
 ) -> None:
     """Audit companies' whole message chains with a real model.
 
@@ -1350,6 +1432,9 @@ def verify(
     from jobd.services.verify import VerifyOutcome, verify_companies
 
     provider = _llm(model)
+    guard = _credit_guard([provider.name], budget)
+    if guard is not None:
+        provider = _llm(model, credit_guard=guard)
 
     def _report(outcome: VerifyOutcome) -> None:
         # Streamed per company, not batched at the end: on a sweep that
@@ -1402,20 +1487,22 @@ def verify(
             conn.commit()
             _report(outcome)
 
-        outcomes = verify_companies(
-            llm=provider,
-            companies=repos.companies,
-            messages=repos.messages,
-            verifications=repos.verifications,
-            sender_rules=repos.sender_rules,
-            limit=limit,
-            company_id=company_id,
-            reverify=reverify,
-            apply=do_apply,
-            after_each=_commit_and_report,
-            concurrency=concurrency,
-        )
-
+        try:
+            outcomes = verify_companies(
+                llm=provider,
+                companies=repos.companies,
+                messages=repos.messages,
+                verifications=repos.verifications,
+                sender_rules=repos.sender_rules,
+                limit=limit,
+                company_id=company_id,
+                reverify=reverify,
+                apply=do_apply,
+                after_each=_commit_and_report,
+                concurrency=concurrency,
+            )
+        except GuardAbort as exc:
+            raise click.ClickException(str(exc)) from None
     if not outcomes:
         click.echo("Nothing to verify (no companies, or all already audited — "
                     "try --reverify).")
@@ -1500,12 +1587,20 @@ def logos(limit: int, refresh: bool, workers: int) -> None:
 @click.option(
     "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
 )
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
 def scrape(
     accounts: tuple[str, ...],
     window_days: int | None,
     model: str,
     bucket: str | None,
     local_store: Path | None,
+    budget: float | None,
 ) -> None:
     """Seed-and-expand scrape: find the job mail without sweeping the mailbox.
 
@@ -1567,6 +1662,7 @@ def scrape(
             bucket=bucket,
             local_store=local_store,
             sink=sink,
+            budget=budget,
         )
     except ScrapeConfigError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -1609,32 +1705,38 @@ def scrape(
     show_default=True,
     help="Concurrent model calls. DB writes stay serial regardless.",
 )
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
 def audit(
     model: str,
     company_name: str | None,
     judge_model: str | None,
     apply_: bool,
     workers: int,
+    budget: float | None,
 ) -> None:
     """LLM audit of the record: unlink misclassified mail, merge duplicate
     applications, teach corrective sender rules. See scrape/audit.py for the
     live cases this repairs (package-delivery mail recorded as job mail, a
     post-acceptance engagement split into two applications)."""
-    from jobd.adapters.llm.credits import CreditGuard, CreditsLow
     from jobd.scrape.audit import run_audit
 
-    credit_guard = CreditGuard()
-    if model.startswith("openrouter/"):
-        try:
-            credit_guard.require()
-        except CreditsLow as exc:
-            raise click.ClickException(str(exc)) from None
     from jobd.adapters.llm import load_provider as _load
 
     # Same cap the judge gets: a 30-message batch's verdict array in
     # pretty-printed JSON routinely passes 2048 output tokens — live-caught
     # as JSONDecodeError mid-array (a truncated list, not a malformed one).
     provider = _load(model, max_tokens=8192)
+    credit_guard = _credit_guard(
+        [provider.name] + ([judge_model] if judge_model else []), budget
+    )
+    if credit_guard is not None:
+        provider = _load(model, max_tokens=8192, credit_guard=credit_guard)
     with _connect() as conn:
         ids = None
         if company_name:
@@ -1655,7 +1757,10 @@ def audit(
         # of one process apart — worth thinking tokens on ~700 calls in a
         # way bulk extraction never is.
         judge = (
-            load_provider(judge_model, max_tokens=8192, reasoning_effort="medium")
+            load_provider(
+                judge_model, max_tokens=8192, reasoning_effort="medium",
+                credit_guard=credit_guard,
+            )
             if judge_model
             else None
         )
@@ -1677,6 +1782,9 @@ def audit(
                 conn, provider, judge=judge, apply=apply_, company_ids=ids,
                 meter=meter, workers=workers, credit_guard=credit_guard,
             )
+        except GuardAbort as exc:
+            meter.finish("budget-exhausted")
+            raise click.ClickException(str(exc)) from None
         except Exception:
             meter.finish("failed")
             raise
@@ -1719,7 +1827,14 @@ def audit(
     show_default=True,
     help="Teach the surviving rules, or just print them.",
 )
-def distill(model: str, apply_: bool) -> None:
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
+def distill(model: str, apply_: bool, budget: float | None) -> None:
     """Compile the model's past judgments into deterministic sender rules.
 
     Sends per-domain aggregates only — counts, label distributions, stored
@@ -1732,6 +1847,11 @@ def distill(model: str, apply_: bool) -> None:
     from jobd.services.metrics import RunMeter
 
     llm = load_provider(model, max_tokens=8192, reasoning_effort="medium")
+    guard = _credit_guard([llm.name], budget)
+    if guard is not None:
+        llm = load_provider(
+            model, max_tokens=8192, reasoning_effort="medium", credit_guard=guard
+        )
     meter = RunMeter.start(
         kind="distill", args={"model": model, "apply": apply_}, providers=[llm]
     )
@@ -1744,6 +1864,9 @@ def distill(model: str, apply_: bool) -> None:
             result = distill_rules(
                 conn, llm, own_address=own_address, apply=apply_, meter=meter
             )
+        except GuardAbort as exc:
+            meter.finish("budget-exhausted")
+            raise click.ClickException(str(exc)) from None
         except Exception:
             meter.finish("failed")
             raise
@@ -1868,12 +1991,20 @@ def serve(host: str, port: int) -> None:
 @click.confirmation_option(
     prompt="This drops the derived record and rebuilds it from raw. Continue?"
 )
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
 def rebuild(
     bucket: str | None,
     local_store: Path | None,
     model: str,
     classify: bool,
     workers: int,
+    budget: float | None,
 ) -> None:
     """Re-derive everything from raw storage (I3).
 
@@ -1885,16 +2016,22 @@ def rebuild(
 
     storage = _storage(bucket, local_store)
     provider = _llm(model)
+    guard = _credit_guard([provider.name], budget)
+    if guard is not None:
+        provider = _llm(model, credit_guard=guard)
 
     with _connect() as conn:
-        result = run_rebuild(
-            storage=storage,
-            llm=provider,
-            repos=_repos(conn),
-            conn=conn,
-            classify=classify,
-            workers=workers,
-        )
+        try:
+            result = run_rebuild(
+                storage=storage,
+                llm=provider,
+                repos=_repos(conn),
+                conn=conn,
+                classify=classify,
+                workers=workers,
+            )
+        except GuardAbort as exc:
+            raise click.ClickException(str(exc)) from None
         conn.commit()
 
     click.echo(f"keys seen          {result.keys_seen}")

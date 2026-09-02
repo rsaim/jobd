@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jobd.adapters.llm.credits import GuardAbort
 from jobd.scrape.events import Emitter
 
 
@@ -71,6 +72,10 @@ class ScrapeManager:
                         local_store=local_store,
                         emitter=emitter,
                     )
+                except GuardAbort as exc:  # budget/balance abort — BaseException
+                    self.error = str(exc)
+                    emitter.emit("error", message=self.error)
+                    emitter.emit("done", counters={}, facts=[])
                 except Exception as exc:  # surfaced via status + stream, not lost
                     self.error = f"{type(exc).__name__}: {exc}"
                     emitter.emit("error", message=self.error)
