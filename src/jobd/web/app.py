@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -39,6 +40,29 @@ from jobd.web.api import router as api_router
 STATIC = Path(__file__).parent / "static"
 
 app = FastAPI(title="jobd dashboard")
+
+
+def _origin_allowed(origin: str | None, host: str) -> bool:
+    """True when `origin` is the same origin as the server's own `host`.
+
+    Compares the parsed netloc, not substrings. The check used to be
+    `host not in origin`, which passes for any attacker host that merely
+    *contains* the operator's: `localhost:8100.evil.com` and
+    `attacker.com/?x=localhost:8100` both matched, so the guard was bypassable
+    by choosing a domain. Nothing else stands in front of these endpoints —
+    no session, no auth — so this failing open meant a page the operator had
+    open could teach sender rules or approve an outbound send.
+
+    Fails closed: a missing origin, a missing Host, or anything urlparse
+    cannot read is refused.
+    """
+    if not origin or not host:
+        return False
+    try:
+        netloc = urlparse(origin).netloc
+    except ValueError:
+        return False
+    return bool(netloc) and netloc.lower() == host.lower()
 
 
 @app.middleware("http")
@@ -64,7 +88,7 @@ async def _same_origin_writes(request: Request, call_next: Any) -> Any:
             return await call_next(request)
         origin = request.headers.get("origin") or request.headers.get("referer")
         host = request.headers.get("host", "")
-        if not origin or host not in origin:
+        if not _origin_allowed(origin, host):
             # Returned, not raised: an exception from inside a middleware's
             # dispatch propagates past FastAPI's handlers instead of becoming
             # a 403, so raising here would surface as a 500 traceback.
