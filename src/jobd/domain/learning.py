@@ -173,7 +173,7 @@ def on_confident_positive(
 
 
 def on_model_negative(
-    *, sender_address: str, known: Mapping[str, str]
+    *, sender_address: str, known: Mapping[str, str], own_address: str = ""
 ) -> Teach | None:
     """The model read the message and said not job-related; what does the
     sender earn?
@@ -183,9 +183,18 @@ def on_model_negative(
     `GENERIC_DOMAINS`'s docstring). No action when any rule already covers
     the sender: the standing decision wins, and a disagreement is surfaced
     for a human (see `sweep_review_queue`'s `rejected_domains`), not flipped.
+
+    `own_address` (the mailbox's own account) never earns a rule: it rides on
+    every message, so one rule about it decides the whole mailbox. The user's
+    own sent mail reaching a "not job-related" verdict is routine, which made
+    this a live bug — `verify.py` and the web teach form already refuse the
+    same write, and this closes the classifier's own path.
     """
     lowered = sender_address.lower().strip().strip("<>")
     if "@" not in lowered:
+        return None
+    own = own_address.lower().strip().strip("<>")
+    if own and lowered == own:
         return None
     if covering_verdict(known, lowered) is not None:
         return None
@@ -193,5 +202,11 @@ def on_model_negative(
     if not domain:
         return None
     if is_generic_domain(domain):
+        return Teach("address", lowered, "negative")
+    if own and domain == own.rsplit("@", 1)[-1]:
+        # A corporate mailbox: a domain rule here would cover the user's own
+        # employer/alias domain and every colleague on it. Narrow to the one
+        # address instead of silencing the domain (verify.py makes the same
+        # refusal for the sweep's suggested rules).
         return Teach("address", lowered, "negative")
     return Teach("domain", domain, "negative")

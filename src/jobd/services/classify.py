@@ -423,7 +423,8 @@ def classify_pending(
                 result.llm_calls -= 1
                 with conn.transaction():
                     _teach_triage_negative(
-                        job.sender, known=known, repos=repos, out=result
+                        job.sender, known=known, repos=repos, out=result,
+                        own_address=job.message.account,
                     )
                     repos.messages.mark_classified(
                         job.message.id, f"triage:{triage_llm.name}"
@@ -697,7 +698,7 @@ def _prepare_one(
             thread_ctx = repos.messages.rfc_parent_context(parent_ref)
     known_contact = _known_contact(sender, recipients, message.account, repos)
     learned, learned_company_id, learned_category, learned_domain, learned_rule = (
-        _match_rule(rules, sender, recipients)
+        _match_rule(rules, sender, recipients, own_address=message.account)
     )
     agency_domain = (
         learned_domain
@@ -941,7 +942,9 @@ def _apply_one(
         # correspondent) and re-teaches (`on_model_negative` returns None
         # when any rule covers the sender) still teach immediately, and
         # with no escalation model configured behavior is unchanged.
-        teach = _pending_negative_teach(job.sender, known=known)
+        teach = _pending_negative_teach(
+            job.sender, known=known, own_address=message.account
+        )
         confirm_domain_teach = (
             teach is not None
             and teach.match_type == "domain"
@@ -950,7 +953,10 @@ def _apply_one(
         )
         if not confirm_domain_teach:
             out.not_job_related += 1
-            _teach_negative(job.sender, known=known, repos=repos, out=out)
+            _teach_negative(
+                job.sender, known=known, repos=repos, out=out,
+                own_address=message.account,
+            )
             repos.messages.mark_classified(message.id, extractor.name)
             repos.reviews.resolve_by_message(message.id)
             return
@@ -961,7 +967,10 @@ def _apply_one(
         confirmed = from_payload(confirm_payload)
         if confirmed.is_negative:
             out.not_job_related += 1
-            _teach_negative(job.sender, known=known, repos=repos, out=out)
+            _teach_negative(
+                job.sender, known=known, repos=repos, out=out,
+                own_address=message.account,
+            )
             repos.messages.mark_classified(message.id, extractor.name)
             repos.reviews.resolve_by_message(message.id)
             return
@@ -990,7 +999,10 @@ def _apply_one(
         out.escalated += 1
         if extraction.is_negative:
             out.not_job_related += 1
-            _teach_negative(job.sender, known=known, repos=repos, out=out)
+            _teach_negative(
+                job.sender, known=known, repos=repos, out=out,
+                own_address=message.account,
+            )
             repos.messages.mark_classified(message.id, extractor.name)
             repos.reviews.resolve_by_message(message.id)
             return
@@ -1571,7 +1583,7 @@ def _known_contact(
 
 
 def _pending_negative_teach(
-    sender: str, *, known: dict[str, str]
+    sender: str, *, known: dict[str, str], own_address: str = ""
 ) -> learning.Teach | None:
     """What `learning.on_model_negative` would teach for this sender — or
     None (unparseable sender, or a covering rule already stands). Split out
@@ -1582,7 +1594,9 @@ def _pending_negative_teach(
     addresses = [a for _, a in getaddresses([sender]) if a]
     if not addresses:
         return None
-    return learning.on_model_negative(sender_address=addresses[0], known=known)
+    return learning.on_model_negative(
+        sender_address=addresses[0], known=known, own_address=own_address
+    )
 
 
 def _teach_negative(
@@ -1591,6 +1605,7 @@ def _teach_negative(
     known: dict[str, str],
     repos: Repositories,
     out: ClassifyResult,
+    own_address: str = "",
 ) -> None:
     """Apply `learning.on_model_negative` for one model-negative verdict.
 
@@ -1599,7 +1614,7 @@ def _teach_negative(
     sender in one call. The policy scopes the rule (domain vs address, see
     `learning.py`) and refuses to touch senders any rule already covers.
     """
-    teach = _pending_negative_teach(sender, known=known)
+    teach = _pending_negative_teach(sender, known=known, own_address=own_address)
     if teach is None:
         return
     repos.sender_rules.add(
@@ -1618,6 +1633,7 @@ def _teach_triage_negative(
     known: dict[str, str],
     repos: Repositories,
     out: ClassifyResult,
+    own_address: str = "",
 ) -> None:
     """Teach from a triage negative — address-scoped only, never domain-wide.
 
@@ -1635,7 +1651,9 @@ def _teach_triage_negative(
     addresses = [a for _, a in getaddresses([sender]) if a]
     if not addresses:
         return
-    teach = learning.on_model_negative(sender_address=addresses[0], known=known)
+    teach = learning.on_model_negative(
+        sender_address=addresses[0], known=known, own_address=own_address
+    )
     if teach is None:
         return
     value = (
@@ -1651,7 +1669,11 @@ def _teach_triage_negative(
 
 
 def _match_rule(
-    rules: list[SenderRule], sender: str, recipients: str
+    rules: list[SenderRule],
+    sender: str,
+    recipients: str,
+    *,
+    own_address: str = "",
 ) -> tuple[
     prefilter.LearnedVerdict | None, UUID | None, str | None, str | None, SenderRule | None
 ]:
@@ -1659,6 +1681,17 @@ def _match_rule(
     recipient? Checked by address first (the more specific match), then
     domain — an address-level correction ("this one person, not the whole
     domain") should not be shadowed by a coarser domain rule.
+
+    `own_address` (the mailbox's own account) is skipped on both sides, the
+    same exclusion `_known_contact` makes and for the same reason: the user's
+    address rides on *every* message, so one rule about it decides the entire
+    mailbox. Live-caught twice — an auto-taught
+    `<own-address> -> undecided` outranked both negative domain rules and
+    Gmail's noise labels in `prefilter.score`, and routed ~78% of a real
+    mailbox to the paid extractor. `verify.py` and the web teach form already
+    refuse to *write* such a rule; this is the read side, which is what
+    actually decides every message, and it also neutralises rows already
+    sitting in the table.
 
     Domain rules match by suffix (`shein.com` covers `market-us.shein.com`
     *and* `news.edmmarket.shein.com`) — real marketing platforms send from a
@@ -1677,7 +1710,12 @@ def _match_rule(
 
     from jobd.domain.prefilter import domain_of
 
-    addresses = [a.lower() for _, a in getaddresses([sender, recipients]) if a]
+    own = own_address.lower().strip().strip("<>")
+    addresses = [
+        a.lower()
+        for _, a in getaddresses([sender, recipients])
+        if a and a.lower() != own
+    ]
     domains = {domain_of(a) for a in addresses}
 
     by_address = {r.value.lower(): r for r in rules if r.match_type == "address"}
@@ -1701,12 +1739,51 @@ def _match_rule(
     return None, None, None, None, None
 
 
+def _parsed_headers(payload: bytes) -> Any:
+    """The header block of one message, parsed once and memoised.
+
+    Two costs this removes, both measured on the real corpus:
+
+    * ``message_from_bytes`` parses the *whole* MIME tree — every part,
+      every base64-encoded body and attachment — to answer a question only
+      the header block can answer. ``BytesHeaderParser`` stops at the blank
+      line after the headers.
+    * The free tier asks for eight headers per message (``from``, ``to``,
+      ``cc``, ``reply-to``, ``date``, ``in-reply-to``, plus ``_is_bulk``'s
+      two), and each call re-parsed from scratch.
+
+    Together: 18x faster header access, byte-identical results (verified
+    over 400 live messages across all eight header names). The cache is
+    keyed by payload identity and bounded — the free tier reads one
+    message's headers in a burst, so a single-entry cache captures nearly
+    all of the reuse without holding the batch's payloads alive.
+    """
+    from email import policy
+    from email.parser import BytesHeaderParser
+
+    cached = getattr(_HEADER_CACHE, "entry", None)
+    if cached is not None and cached[0] is payload:
+        return cached[1]
+    try:
+        parsed = BytesHeaderParser(policy=policy.default).parsebytes(payload)
+    except Exception:
+        parsed = None
+    _HEADER_CACHE.entry = (payload, parsed)
+    return parsed
+
+
+#: Single-slot memo for :func:`_parsed_headers`. Thread-local: phase 1 is
+#: sequential, but `sweep_review_queue` and any future parallel reader must
+#: not hand each other a half-written entry.
+_HEADER_CACHE = threading.local()
+
+
 def _header(payload: bytes, name: str) -> str:
     """One header, or empty. Used only for pre-filter signals."""
-    from email import message_from_bytes, policy
-
+    parsed = _parsed_headers(payload)
+    if parsed is None:
+        return ""
     try:
-        parsed = message_from_bytes(payload, policy=policy.default)
         return str(parsed.get(name) or "")
     except Exception:
         return ""
@@ -1975,7 +2052,7 @@ def sweep_review_queue(
         text = (message.body_text or "")[:6000]
 
         learned, _, learned_category, learned_domain, _ = _match_rule(
-            rules, sender, ""
+            rules, sender, "", own_address=message.account
         )
         agency_domain = (
             learned_domain
@@ -2200,7 +2277,10 @@ def sweep_review_queue(
                     # a rule under the same policy classify-time negatives
                     # do; `rejected_domains` above still surfaces the tally
                     # for a human to audit.
-                    _teach_negative(sender, known=known, repos=repos, out=inner)
+                    _teach_negative(
+                        sender, known=known, repos=repos, out=inner,
+                        own_address=message.account,
+                    )
                     repos.messages.mark_classified(message.id, judge.name)
                     repos.reviews.resolve_by_message(message.id)
                 elif extraction.is_positive and (
