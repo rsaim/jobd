@@ -424,3 +424,45 @@ def _restamp[T: _HasStage](winner: T, earliest: T) -> T:
     from dataclasses import replace
 
     return replace(winner, occurred_at=earliest.occurred_at)  # type: ignore[type-var]
+
+
+def enforce_forward_order[T: _HasStage](events: Sequence[T]) -> list[T]:
+    """Keep only events that move the process forward. Drops contradictions.
+
+    Stage ordering is a fixed property of the vocabulary, so enforcing it in
+    code is cheaper and more reliable than asking a model to hold the whole
+    funnel in mind while reading a chain. The per-application timeline call
+    already emits few, well-chosen events; this removes the residue where it
+    walked back down the funnel (a "quick sync" after a coding round genuinely
+    reads like a screen).
+
+    Demoted events are **dropped, not reordered**. Moving one to where it
+    would be monotonic would invent a claim the evidence does not support --
+    the message stays linked to the application either way (`message_company`),
+    so the evidence trail survives what the timeline declines to assert.
+
+    Terminal stages are the exception in both directions: any of them may
+    follow any stage (a process can end from anywhere), several may follow
+    each other (`offer` -> `accepted` -> `declined` is a real sequence), and
+    nothing non-terminal may follow one -- the process is over, which is the
+    same contradiction `classify.py`'s monotonicity guard refuses per message.
+    """
+    if not events:
+        return []
+    kept: list[T] = []
+    highest = -1
+    ended = False
+    for event in sorted(events, key=lambda e: e.occurred_at):
+        stage = str(event.stage)
+        if stage in TERMINAL_STAGES:
+            kept.append(event)
+            ended = True
+            continue
+        if ended:
+            continue
+        rank = _STAGE_PROGRESS[stage]
+        if rank <= highest:
+            continue
+        highest = rank
+        kept.append(event)
+    return kept

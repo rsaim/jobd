@@ -2095,3 +2095,90 @@ def import_archive(
 
 if __name__ == "__main__":
     main()
+
+
+@main.command("derive-stages")
+@click.option(
+    "--model",
+    envvar="JOBD_MODEL",
+    default="default",
+    show_default=True,
+    help="LiteLLM id that reads each application's chain. 'default' resolves "
+    "JOBD_MODEL, then the built-in default.",
+)
+@click.option(
+    "--apply/--dry-run",
+    "apply_",
+    default=False,
+    show_default=True,
+    help="Write the derived timelines, or just count what they would be.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Only the N applications with the most mail. Omit for all of them.",
+)
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    envvar="JOBD_RUN_BUDGET",
+    help="Max dollars this run may spend on OpenRouter. Required for a paid run.",
+)
+def derive_stages_cmd(
+    model: str, apply_: bool, limit: int | None, budget: float | None
+) -> None:
+    """Rebuild every application's stage timeline from its whole mail chain.
+
+    Stage is a property of a hiring process, not of one email: read alone, a
+    "Confirming Zoom Conversation" fits a screen, a technical round and an
+    onsite equally well, and only the sequence tells them apart. Extracting it
+    per message produced 833 events across 229 applications — one carrying 49,
+    `accepted` asserted 67 times across the 13 applications that have one.
+
+    This asks once per application instead, over the ordered chain, and sends
+    metadata (subject, date, sender, direction) plus a short body snippet on
+    the last few messages — where endings are stated. Far less content leaves
+    the machine than per-message extraction sent, and it costs ~230 calls
+    rather than thousands.
+
+    Written rows carry `extracted_by='timeline'`; a re-run replaces only those,
+    so human and per-message events are left alone and running twice is the
+    same as running once.
+    """
+    from jobd.adapters.llm import load_provider
+    from jobd.domain.timeline_extraction import TIMELINE_MAX_TOKENS
+    from jobd.services.derive_stages import derive_stages
+
+    llm = load_provider(model, max_tokens=TIMELINE_MAX_TOKENS)
+    guard = _credit_guard([llm.name], budget)
+    if guard is not None:
+        llm = load_provider(
+            model, max_tokens=TIMELINE_MAX_TOKENS, credit_guard=guard
+        )
+
+    with _connect() as conn:
+        result = derive_stages(conn, llm, limit=limit, apply=apply_)
+
+    click.echo(
+        f"{'wrote' if apply_ else 'would write'} {result.events_written} stage "
+        f"events over {result.applications} applications "
+        f"({result.llm_calls} model calls)"
+    )
+    if result.events_replaced:
+        click.echo(f"  replaced {result.events_replaced} earlier timeline events")
+    if result.unrelated:
+        click.echo(f"  {result.unrelated} applications judged not job-related")
+    if result.events_dropped_backwards:
+        click.echo(
+            f"  {result.events_dropped_backwards} events dropped as backwards"
+        )
+    if result.bad_evidence_index:
+        click.echo(
+            f"  {result.bad_evidence_index} claims dropped for bad evidence index"
+        )
+    for err in result.errors[:5]:
+        click.echo(f"  error: {err}", err=True)
+    if not apply_:
+        click.echo("dry run — pass --apply to write.")

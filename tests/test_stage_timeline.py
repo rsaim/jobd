@@ -153,3 +153,60 @@ def test_empty_and_single() -> None:
     assert resolve_stage_window([], within_hours=24) == []
     one = [ev("applied", 0)]
     assert resolve_stage_window(one, within_hours=24) == one
+
+
+# --- enforce_forward_order ------------------------------------------------
+#
+# The per-entity timeline call sees the whole chain, so it emits far fewer
+# and better events than per-message extraction did -- but it still
+# occasionally walks back down the funnel (technical, then recruiter_screen)
+# because the subjects genuinely read that way. Ordering is a deterministic
+# property of the vocabulary, so it is cheaper and more reliable to enforce
+# in code than to keep asking the model for it.
+#
+# Demoted events are dropped, not reordered: moving an event to where it
+# would be monotonic invents a claim the evidence does not support.
+
+from jobd.domain.record import enforce_forward_order  # noqa: E402
+
+
+def test_forward_sequence_is_untouched() -> None:
+    seq = [ev("applied", 0), ev("technical", 10), ev("offer", 20)]
+    assert enforce_forward_order(seq) == seq
+
+
+def test_backwards_step_is_dropped() -> None:
+    a, b, c = ev("applied", 0), ev("technical", 10), ev("recruiter_screen", 20)
+    assert enforce_forward_order([a, b, c]) == [a, b]
+
+
+def test_terminal_is_kept_after_any_stage() -> None:
+    seq = [ev("technical", 0), ev("rejected", 10)]
+    assert enforce_forward_order(seq) == seq
+
+
+def test_terminal_does_not_block_a_later_terminal() -> None:
+    """`accepted` then `declined` is a real sequence -- an offer taken back."""
+    seq = [ev("offer", 0), ev("accepted", 10), ev("declined", 20)]
+    assert enforce_forward_order(seq) == seq
+
+
+def test_non_terminal_after_terminal_is_dropped() -> None:
+    """The process ended; a later interview claim contradicts it."""
+    a, b, c = ev("onsite", 0), ev("rejected", 10), ev("phone_screen", 20)
+    assert enforce_forward_order([a, b, c]) == [a, b]
+
+
+def test_repeated_stage_is_dropped() -> None:
+    """Forward means strictly forward: the same stage twice is one milestone."""
+    a, b = ev("onsite", 0), ev("onsite", 10)
+    assert enforce_forward_order([a, b]) == [a]
+
+
+def test_ordering_is_by_time_not_input_order() -> None:
+    first, second = ev("applied", 0), ev("offer", 30)
+    assert enforce_forward_order([second, first]) == [first, second]
+
+
+def test_empty_is_empty() -> None:
+    assert enforce_forward_order([]) == []
