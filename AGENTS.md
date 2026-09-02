@@ -92,6 +92,21 @@ jobd review sweep                       # judge model clears the queue
 jobd distill --apply                    # compile judgments into sender rules
 ```
 
+Under Docker, put the key in a `.env` file at the repo root rather than
+exporting it — compose reads `.env` automatically, and the compose file
+passes the key through from the shell (`${OPENROUTER_API_KEY:-}`), so a
+`docker compose up` from a shell without it exported silently blanks it:
+
+```bash
+echo "OPENROUTER_API_KEY=sk-or-..." > .env && chmod 600 .env
+docker compose up -d app
+```
+
+`.env` is gitignored. The dashboard's summary card and chat dock additionally
+need `JOBD_CHAT_MODEL` (compose defaults it to `openrouter/z-ai/glm-5.2`);
+without it both features return 404 and the UI reads "Summary isn't
+configured".
+
 **Picking a model — cost is dominated by input.** Classification feeds a
 whole email in and gets a small JSON verdict back: a real 9,256-call run
 billed $3.87, which works out to ~6.1k input tokens against ~120 output
