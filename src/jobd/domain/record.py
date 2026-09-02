@@ -12,9 +12,10 @@ thing worth being unable to represent.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 Channel = Literal["email", "linkedin"]
@@ -294,3 +295,132 @@ def is_ghosted(
     if latest_stage in TERMINAL_STAGES:
         return False
     return (now - last_message_at).days > after_days
+
+
+#: Anything with a `stage` and an `occurred_at` — `StageEvent` here, and
+#: `services.timeline.Claim` on the read side. `collapse_stage_runs` needs
+#: only those two attributes, and duplicating it per type would let the two
+#: timelines drift apart.
+class _HasStage(Protocol):
+    @property
+    def stage(self) -> Any: ...
+    @property
+    def occurred_at(self) -> datetime: ...
+
+
+def collapse_stage_runs[T: _HasStage](events: Sequence[T]) -> list[T]:
+    """Fold consecutive same-stage events into the earliest of each run.
+
+    Per-message extraction asks every message in a thread "what stage is
+    this?", so one real event becomes as many assertions as the thread has
+    replies. Against the live corpus that was 280 of 833 stage events (33.6%)
+    describing something already recorded, and ``accepted`` -- an outcome that
+    can happen at most once per application -- appearing 67 times across 13
+    applications.
+
+    The fold keeps the *earliest* event of each run: the moment a stage is
+    first evidenced is when it happened, and the later replies are the same
+    conversation continuing. Evidence is preserved either way -- every message
+    keeps its `company_id`/`application_id` link (`message_company`), so
+    collapsing the timeline never loses the trail back to the mail.
+
+    Deliberately **not** monotonicity enforcement. A later run of an earlier
+    stage is kept, because a genuine second recruiter screen with a different
+    team is a real event and not a contradiction; only *adjacent* repeats are
+    one event. Ordering is by ``occurred_at`` regardless of the caller's input
+    order, so a query that returned rows in insertion order still reduces
+    correctly.
+
+    Pure and derived, like :func:`is_ghosted` above it: nothing here writes,
+    so re-deriving the record (I3) re-derives the collapsed timeline for free.
+    """
+    if not events:
+        return []
+    ordered = sorted(events, key=lambda e: e.occurred_at)
+    collapsed = [ordered[0]]
+    for event in ordered[1:]:
+        if event.stage != collapsed[-1].stage:
+            collapsed.append(event)
+    return collapsed
+
+
+#: How far a hiring process has actually progressed. Ordering only — a real
+#: process skips stages freely, and this asserts nothing about which it must
+#: visit. Terminal stages are absent on purpose: they are outcomes, not
+#: positions in the funnel, and `resolve_stage_window` never trades one away.
+_STAGE_PROGRESS: dict[str, int] = {
+    "applied": 0,
+    "recruiter_screen": 1,
+    "phone_screen": 2,
+    "technical": 3,
+    "onsite": 4,
+    "offer": 5,
+}
+
+
+def resolve_stage_window[T: _HasStage](
+    events: Sequence[T], *, within_hours: float = 24.0
+) -> list[T]:
+    """Within a short window, the furthest-along stage wins.
+
+    `collapse_stage_runs` folds repeats of the *same* stage. This handles the
+    other half of the per-message failure: one interview produces an invite,
+    an update, a reminder and a confirmation, each independently asked "what
+    stage is this?", so the timeline oscillates between neighbouring stages
+    within hours. On the live corpus 29% of stage evidence is scheduling
+    logistics, and 35% of transitions land inside a single day (p10 = 15
+    minutes) — a hiring process does not advance a stage every fifteen
+    minutes, so those are one event described four ways.
+
+    The furthest-along claim wins because it is the *specific* one: a
+    recruiter writing "technical interview" says something the calendar bot's
+    "quick sync" does not, and the generic reading is the one to discard. The
+    surviving event keeps the **earliest** timestamp of its window — when the
+    event was first evidenced — so merging never drifts a timeline later.
+
+    Terminal stages (`TERMINAL_STAGES`) are passed through untouched: an
+    ending is an outcome, not a position in the funnel, and a rejection that
+    happens to land beside interview logistics must not be traded for an
+    `onsite`. They neither absorb their neighbours nor are absorbed.
+
+    `within_hours` is an argument rather than a constant for the reason
+    `is_ghosted`'s threshold is: this is derived on read, so changing your
+    mind costs a re-render, not a migration.
+    """
+    if not events:
+        return []
+    ordered = sorted(events, key=lambda e: e.occurred_at)
+    out: list[T] = []
+    window: list[T] = []
+
+    def flush() -> None:
+        if window:
+            best = max(window, key=lambda e: _STAGE_PROGRESS[str(e.stage)])
+            out.append(best if best is window[0] else _restamp(best, window[0]))
+            window.clear()
+
+    for event in ordered:
+        if str(event.stage) in TERMINAL_STAGES:
+            flush()
+            out.append(event)
+            continue
+        if window:
+            gap = (event.occurred_at - window[0].occurred_at).total_seconds()
+            if gap > within_hours * 3600:
+                flush()
+        window.append(event)
+    flush()
+    return sorted(out, key=lambda e: e.occurred_at)
+
+
+def _restamp[T: _HasStage](winner: T, earliest: T) -> T:
+    """The winning stage, dated to when its window opened.
+
+    `dataclasses.replace` keeps the winner's own evidence link — the message
+    that made the specific claim stays the proof of it (G2) — while the time
+    becomes the moment the event was first seen. Both `StageEvent` and
+    `services.timeline.Claim` are frozen dataclasses, so this is total.
+    """
+    from dataclasses import replace
+
+    return replace(winner, occurred_at=earliest.occurred_at)  # type: ignore[type-var]

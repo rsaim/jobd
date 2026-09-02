@@ -155,6 +155,20 @@ Rules:
   email); the only trace it ever happened is a "Re: Welcome to Acme,
   Alex!" thread about H-1B transfer paperwork, and every message in it was
   left stageless because none literally used the word "offer".
+- "offer" means the company extended an actual offer of employment — a
+  compensation figure, an offer letter, a verbal offer, or a negotiation
+  about terms. **An interview is not an offer, however far along it is.** A
+  calendar invitation, a CoderPad or HackerRank link, an availability
+  request, an interview reminder or confirmation, a "final round" or
+  "onsite" invite, and a "next steps" note proposing more interviews are all
+  evidence of an *interview stage* — use "phone_screen"/"technical"/"onsite"
+  as fits, or null. Real miss, live-caught: 40 of 49 recorded "offer" events
+  had no offer language anywhere in them — they were interview invites
+  ("Invitation: Coding Video Interview", "You've been invited to join a
+  CoderPad session", "Reminder: You have an upcoming interview"). "offer" is
+  the most consequential stage in the record — it decides an application's
+  outcome — so require explicit offer language rather than inferring it from
+  a process looking advanced.
 - "rejected", "withdrawn", "declined", and "accepted" are four different
   endings — do not default to "rejected" or "withdrawn" for any of them.
   "rejected" is the company saying no. "withdrawn" is the candidate leaving

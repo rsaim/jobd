@@ -19,7 +19,13 @@ from uuid import UUID
 
 import psycopg
 
-from jobd.domain.record import Direction, Stage, is_ghosted
+from jobd.domain.record import (
+    Direction,
+    Stage,
+    collapse_stage_runs,
+    is_ghosted,
+    resolve_stage_window,
+)
 
 #: Stages in the order a hiring process runs through them, used only to break
 #: ties when several events share a timestamp. Not an assertion that a real
@@ -194,6 +200,28 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
                 extracted_by=claim[7],
             )
         )
+
+    # Stage is extracted per message, but it is a property of the *process*,
+    # so every `Re:` in a thread asserts the same event again — 380 of 833
+    # rows on the live corpus (45.6%), and `accepted` 67 times across the 13
+    # applications that have one. Collapse consecutive same-stage runs to the
+    # earliest evidence of each. Derived on read, never stored: the rows stay,
+    # so widening or dropping this costs a re-render, not a migration (the
+    # same M3 trade `is_ghosted` makes).
+    # Two reducers, in order. `collapse_stage_runs` folds repeats of the same
+    # stage (one event asserted once per reply in a thread).
+    # `resolve_stage_window` then handles the harder half: one interview
+    # yields an invite, an update, a reminder and a confirmation, each
+    # independently guessed at, so neighbouring stages oscillate within
+    # hours. The furthest-along claim in a window wins, and a second collapse
+    # folds any same-stage neighbours that merging just created.
+    #
+    # Live corpus: 833 raw rows -> 377 claims, and stage regressions (a
+    # timeline stepping backwards through the funnel) 193 -> 46.
+    by_application = {
+        app_id: collapse_stage_runs(resolve_stage_window(collapse_stage_runs(app_claims)))
+        for app_id, app_claims in by_application.items()
+    }
 
     return CompanyTimeline(
         company_id=company_id,

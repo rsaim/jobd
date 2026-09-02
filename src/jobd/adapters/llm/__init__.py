@@ -23,9 +23,31 @@ __all__ = ["DEFAULT_MODEL", "OllamaProvider", "load_provider"]
 
 #: The model used when neither `--model` nor `JOBD_MODEL` says otherwise.
 #: A configuration default, not a classification rule — swap freely via
-#: `JOBD_MODEL`. DeepSeek V4 Flash 0731 is the top flash model by OpenRouter
-#: usage (12.2T tokens, Sep 2026) and validates against the extraction schema.
-DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+#: `JOBD_MODEL`.
+#:
+#: Chosen on measured cost-per-call against this workload, which is heavily
+#: input-dominated: a real 9,256-call classify run billed $3.87, implying
+#: ~6.1k input tokens against a ~120-token JSON verdict. At that ratio the
+#: input price is ~96% of the bill and the output price barely registers, so
+#: the pick is the cheapest *input* rate that still does strict json_schema.
+#:
+#: gpt-oss-20b is $0.03/Mtok in ($1.99 per 10k calls) against DeepSeek V4
+#: Flash 0731's $0.065 ($4.18) — 2.1x cheaper for the same work — and carries
+#: the strongest published structured-output record in the budget tier
+#: (~98% valid JSON). The genuinely cheaper ids (granite-4.0-h-micro at
+#: $0.017, ling-3.0-flash at $0.021, qwen3.7-flash at $0.030) do **not**
+#: advertise `structured_outputs`, and `LiteLLMProvider.extract` sends
+#: `"strict": True` — so they are disqualified without a code change, not
+#: merely riskier.
+#:
+#: Its 131k context is far smaller than DeepSeek's 1.3M. That is slack at
+#: ~6.1k tokens/call, but it is the constraint to re-check if
+#: `_THREAD_BODY_CAP` or the few-shot context ever grows substantially.
+#:
+#: Changing this also means changing JOBD_PRICE_PER_MTOK_IN/OUT (see
+#: docker-compose.yml) — CreditGuard enforces the run budget against those
+#: numbers, so a stale pair silently mis-sizes the ceiling.
+DEFAULT_MODEL = "openrouter/openai/gpt-oss-20b"
 
 
 def load_provider(

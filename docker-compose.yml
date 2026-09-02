@@ -41,11 +41,16 @@ services:
       # rule-based pipeline never read it:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Per-token price for the extractor, $/Mtok. LiteLLM's price table
-      # predates some gateway models (deepseek-v4-flash-0731,
-      # gemini-2.5-flash-lite), so without these the dashboard cost and the
-      # CreditGuard run budget both read $0. Revisit if JOBD_MODEL changes.
-      JOBD_PRICE_PER_MTOK_IN: "0.10"
-      JOBD_PRICE_PER_MTOK_OUT: "0.40"
+      # predates some gateway models, so without these the dashboard cost and
+      # the CreditGuard run budget both read $0 — and the budget is only a
+      # real ceiling if these match the model actually in use.
+      #
+      # These track DEFAULT_MODEL (openrouter/openai/gpt-oss-20b). They are
+      # NOT generic: the previous pair (0.10/0.40) was gemini-2.5-flash-lite's
+      # rate and over-stated deepseek-v4-flash-0731's spend by ~1.5x. Update
+      # both numbers whenever JOBD_MODEL or DEFAULT_MODEL changes.
+      JOBD_PRICE_PER_MTOK_IN: "0.03"
+      JOBD_PRICE_PER_MTOK_OUT: "0.13"
     volumes:
       - rawstore:/data
     ports:

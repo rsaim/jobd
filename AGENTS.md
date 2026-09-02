@@ -87,10 +87,35 @@ model clear that queue instead:
 
 ```bash
 export OPENROUTER_API_KEY=...           # or any LiteLLM-supported provider
-jobd classify --model openrouter/google/gemini-3.7-flash --all
-jobd review sweep --model openrouter/google/gemini-3.7-flash
+jobd classify --all --budget 5          # uses DEFAULT_MODEL (gpt-oss-20b)
+jobd review sweep                       # judge model clears the queue
 jobd distill --apply                    # compile judgments into sender rules
 ```
+
+**Picking a model — cost is dominated by input.** Classification feeds a
+whole email in and gets a small JSON verdict back: a real 9,256-call run
+billed $3.87, which works out to ~6.1k input tokens against ~120 output
+tokens. Input price is ~96% of the bill, so compare `$/Mtok in` first and
+treat the output rate as a rounding error. Projected onto that profile
+(OpenRouter list prices, Sep 2026):
+
+| model | $/Mtok in | $/Mtok out | per 10k calls |
+|---|---:|---:|---:|
+| `openai/gpt-oss-20b` (default) | 0.030 | 0.130 | **$1.99** |
+| `deepseek/deepseek-v4-flash-0731` | 0.065 | 0.180 | $4.18 |
+| `google/gemini-2.5-flash-lite` | 0.100 | 0.400 | $6.58 |
+| `google/gemini-3.7-flash` | 0.750 | 3.750 | $50.25 |
+
+The Gemini 3.x Flash line is priced for a different job — 25x the default's
+input rate. Reach for it as a `--escalation-model` on the residue the cheap
+extractor punts on, not as the extractor itself.
+
+Anything you pick must support strict `json_schema` structured output —
+`LiteLLMProvider.extract` sends `"strict": True`, and several cheaper ids
+(`granite-4.0-h-micro`, `ling-3.0-flash`, `qwen3.7-flash`) do not advertise
+it. Set `JOBD_PRICE_PER_MTOK_IN`/`_OUT` to match whatever you choose:
+`CreditGuard` enforces `--budget` against those numbers, so a stale pair
+mis-sizes the ceiling rather than failing loudly.
 
 Design invariants an agent should preserve when extending this code:
 
@@ -119,14 +144,18 @@ every quality dimension a deterministic metric.
 ```bash
 pip install -e ".[eval]"
 python evals/run.py                                        # free tier, offline
-python evals/run.py --model openrouter/google/gemini-3.7-flash   # paid tier
+python evals/run.py --model openrouter/openai/gpt-oss-20b   # paid tier
 python evals/run.py --verbose                              # per-case report
 ```
 
 Current scorecard (109 messages; job-relatedness is binary, stage and
-company are scored over gold job-related messages):
+company are scored over gold job-related messages). The paid column was
+measured on `gemini-3.7-flash`, which was the default when it was run — it
+has **not** been re-measured against the current `gpt-oss-20b` default, so
+read it as "what the paid tier looked like on that model", not as a claim
+about today's default:
 
-| metric | free tier (prefilter + rules) | gemini-3.7-flash |
+| metric | free tier (prefilter + rules) | gemini-3.7-flash (not current default) |
 |---|---|---|
 | precision | 1.000 | 1.000 |
 | recall | 1.000 | 1.000 |

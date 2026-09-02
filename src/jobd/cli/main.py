@@ -112,6 +112,7 @@ def ingest() -> None:
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket. Omit to use local.")
 @click.option(
     "--local-store",
+    envvar="JOBD_LOCAL_STORE",
     type=click.Path(path_type=Path),
     help="Write raw to this directory instead of S3.",
 )
@@ -243,7 +244,8 @@ def _day_already_done(database_url: str, source: str, account: str, day: Any) ->
 )
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket. Omit to use local.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Write raw here instead."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Write raw here instead."
 )
 def ingest_gmail_day(
     account: str, day: str, force: bool, bucket: str | None, local_store: Path | None
@@ -324,7 +326,8 @@ def ingest_gmail_day(
 @click.option("--force", is_flag=True, help="Re-check every day, even completed ones.")
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket. Omit to use local.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Write raw here instead."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Write raw here instead."
 )
 def ingest_gmail_backfill(
     account: str,
@@ -695,7 +698,8 @@ def _credit_guard(models: list[str], budget: float | None) -> Any | None:
 )
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket holding raw messages.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Filesystem archive."
 )
 @click.option(
     "--workers",
@@ -1250,8 +1254,8 @@ def review_sweep(model: str | None, limit: int, fresh: bool, budget: float | Non
 @main.command()
 @click.option(
     "--local-store",
-    type=click.Path(path_type=Path),
     envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path),
     default=Path.home() / ".jobd" / "demo-raw",
     show_default=True,
     help="Filesystem raw store for the synthetic mail (no S3 needed).",
@@ -1585,7 +1589,8 @@ def logos(limit: int, refresh: bool, workers: int) -> None:
 )
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket for raw messages.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Filesystem archive."
 )
 @click.option(
     "--budget",
@@ -1977,7 +1982,8 @@ def serve(host: str, port: int) -> None:
 @main.command()
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket holding raw messages.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Filesystem archive."
 )
 @click.option("--model", default="default", show_default=True, envvar="JOBD_MODEL")
 @click.option("--classify/--no-classify", default=True, show_default=True)
@@ -2046,7 +2052,8 @@ def rebuild(
 @main.command("import")
 @click.option("--bucket", envvar="JOBD_BUCKET", help="S3 bucket holding raw messages.")
 @click.option(
-    "--local-store", type=click.Path(path_type=Path), help="Filesystem archive."
+    "--local-store", envvar="JOBD_LOCAL_STORE",
+    type=click.Path(path_type=Path), help="Filesystem archive."
 )
 @click.option(
     "--workers",
