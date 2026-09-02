@@ -40,6 +40,13 @@ services:
       # Optional, for LLM extraction and the chat dock — the demo and the
       # rule-based pipeline never read it:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # The company-summary card and the chat dock stay off until this is set
+      # (a 404, not an error — see api.py's chat_turn). It is separate from
+      # JOBD_MODEL on purpose: the extractor runs over the whole mailbox and
+      # is chosen for cost, while these are a handful of interactive calls
+      # that want a stronger head. Whatever is set here is offered in the
+      # picker alongside _CHAT_MODEL_CHOICES.
+      JOBD_CHAT_MODEL: ${JOBD_CHAT_MODEL:-openrouter/z-ai/glm-5.2}
       # Per-token price for the extractor, $/Mtok. LiteLLM's price table
       # predates some gateway models, so without these the dashboard cost and
       # the CreditGuard run budget both read $0 — and the budget is only a
