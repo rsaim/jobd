@@ -106,7 +106,7 @@ from jobd.domain.record import resolve_stage_window  # noqa: E402
 
 
 def test_window_keeps_furthest_stage_among_same_day_chatter() -> None:
-    """The live Datadog case: one interview, five logistics mails."""
+    """One interview, five logistics mails -- the live failure shape."""
     seq = [
         ev("phone_screen", 0),
         ev("onsite", 60),
@@ -210,3 +210,66 @@ def test_ordering_is_by_time_not_input_order() -> None:
 
 def test_empty_is_empty() -> None:
     assert enforce_forward_order([]) == []
+
+
+# --- onboarding_implies_accepted -----------------------------------------
+#
+# An offer is routinely made by phone or e-signature and never appears in
+# the mailbox. What DOES appear afterwards is employment administration:
+# a "Welcome to <company>" thread, payroll and benefits enrolment, I-9/W-4,
+# and -- for a visa holder -- months of H-1B/LCA attorney mail. That is
+# conclusive evidence the process succeeded, and it is a keyword rule, not a
+# judgment call.
+#
+# It lives in code because the model is not reliable here: on the identical
+# 33-message chain, one call answered "accepted" and the next answered
+# "technical", at temperature 0. A stage that decides an application's
+# outcome cannot be a coin flip, and a deterministic reading of the same
+# evidence is both cheaper and reproducible (I3).
+
+from jobd.domain.record import onboarding_accepted_index  # noqa: E402
+
+
+def test_welcome_thread_is_onboarding() -> None:
+    assert onboarding_accepted_index(["Welcome to Acme, Sam!"]) == 0
+
+
+def test_visa_paperwork_is_onboarding() -> None:
+    subjects = ["Re: Next Steps", "LCA Posting (Employee): Action Needed"]
+    assert onboarding_accepted_index(subjects) == 1
+
+
+def test_payroll_and_i9_are_onboarding() -> None:
+    assert onboarding_accepted_index(["Your I-9 and W-4 forms"]) == 0
+    assert onboarding_accepted_index(["Payroll enrollment"]) == 0
+
+
+def test_earliest_onboarding_message_wins() -> None:
+    """The offer was accepted when onboarding STARTED, not at its last mail."""
+    subjects = ["Welcome to Acme!", "Re: Welcome to Acme!", "Your I-9 forms"]
+    assert onboarding_accepted_index(subjects) == 0
+
+
+def test_interview_mail_is_not_onboarding() -> None:
+    for subject in [
+        "Invitation: Coding Video Interview",
+        "You've been invited to join a CoderPad session",
+        "Reminder: You have an upcoming interview",
+        "Final Interview w/ Acme",
+        "Re: Next Steps",
+        "Availability Request",
+    ]:
+        assert onboarding_accepted_index([subject]) is None, subject
+
+
+def test_rejection_is_not_onboarding() -> None:
+    assert onboarding_accepted_index(["Update on your application"]) is None
+
+
+def test_welcome_to_the_team_newsletter_is_not_onboarding() -> None:
+    """'Welcome to our newsletter' must not read as a hire."""
+    assert onboarding_accepted_index(["Welcome to the Acme Weekly newsletter"]) is None
+
+
+def test_empty_chain() -> None:
+    assert onboarding_accepted_index([]) is None

@@ -31,6 +31,7 @@ message id before writing a `StageEvent` (G2 -- no claim without evidence).
 
 from __future__ import annotations
 
+import re
 from typing import Any, get_args
 
 from jobd.domain.record import Stage
@@ -130,7 +131,17 @@ only the distinct steps.
 5. Do include the ending if there is one. Endings hide in the body snippets \
 at the bottom, not in subjects: "Re: Next Steps" may well BE the rejection. \
 Read those snippets before answering.
-6. An out-of-office auto-reply and a bare meeting cancellation evidence \
+6. ONBOARDING MEANS THE OFFER WAS ACCEPTED. If the chain contains new-hire \
+or employment-administration mail -- "Welcome to <company>", a manager \
+introducing themselves, background check, I-9/W-4, payroll or benefits \
+enrolment, start date, equipment or badge setup, or work-visa paperwork \
+(H-1B, LCA, support letter, immigration attorney) -- then this person was \
+hired, and you must emit "accepted". Emit it even though no message says \
+"offer" or "accepted": offers are routinely made by phone or e-signature \
+and never appear in the mailbox at all, so this administrative mail is the \
+ONLY evidence the process succeeded. A chain that ends in onboarding but \
+shows only interviews is a wrong answer.
+7. An out-of-office auto-reply and a bare meeting cancellation evidence \
 nothing. Skip them. Emit only what the chain shows -- a chain that never \
 got past an acknowledgement is just "applied", and an empty list is a valid \
 answer.
@@ -158,14 +169,35 @@ TIMELINE_MAX_TOKENS = 8192
 #: like to extend an offer" to be legible; far short of a whole email.
 _SNIPPET_CHARS = 300
 
-#: How many of the chain's last messages carry a body snippet. Endings are
-#: the one thing subjects cannot show: of 141 terminal events in the live
-#: corpus, exactly 4 (3%) had an outcome word anywhere in the subject -- the
-#: rest arrive as "Re: Next Steps" with the decision in the body. Metadata
-#: alone therefore cannot close an application, and a timeline that never
-#: ends is worse than one with a rough middle. The tail is where endings sit,
-#: so a few snippets there buy the outcome at a fraction of full bodies.
+#: How many of the chain's last messages always carry a body snippet.
+#: Endings are the one thing subjects cannot show: of 141 terminal events in
+#: the live corpus, exactly 4 (3%) had an outcome word anywhere in the
+#: subject -- the rest arrive as "Re: Next Steps" with the decision in the
+#: body. Metadata alone therefore cannot close an application, and a timeline
+#: that never ends is worse than one with a rough middle.
 _TAIL_WITH_BODY = 4
+
+#: Subjects that earn a body snippet wherever they sit in the chain, because
+#: they mark an outcome that the tail may not contain.
+#:
+#: The tail heuristic assumes endings come last, and usually they do -- but
+#: an accepted offer is followed by *more* mail, not less: onboarding,
+#: payroll, and in one live case two months of H-1B/LCA immigration-attorney
+#: threads. The "Welcome to <company>" that actually evidences the offer then
+#: sits mid-chain with no snippet, and the model reads a process that just
+#: stops after a technical screen. That was a real miss against the
+#: operator's own account of which offers were real.
+#:
+#: Deliberately narrow: outcome words only, no interview vocabulary. Matching
+#: "interview" here would put a snippet on half the chain and undo the point
+#: of a metadata-first rendering.
+_OUTCOME_SUBJECT = re.compile(
+    r"\b(offer|welcome\s+to|congratulat|onboard|new\s+hire|start\s+date|"
+    r"background\s+check|i-9|w-4|payroll|equity|compensation|"
+    r"unfortunat|not\s+moving\s+forward|regret|declin|withdraw|"
+    r"h-?1b|lca|visa|immigration)\b",
+    re.I,
+)
 
 
 def render_chain(messages: list[dict[str, Any]]) -> str:
@@ -191,7 +223,7 @@ def render_chain(messages: list[dict[str, Any]]) -> str:
         sender = (m.get("sender_address") or "?").strip()
         subject = (m.get("subject") or "(no subject)").strip().replace("\n", " ")
         lines.append(f"{i}. {date} {arrow} {sender}: {subject[:160]}")
-        if i - 1 >= tail_starts:
+        if i - 1 >= tail_starts or _OUTCOME_SUBJECT.search(subject):
             body = " ".join((m.get("body_text") or "").split())
             if body:
                 lines.append(f"     | {body[:_SNIPPET_CHARS]}")

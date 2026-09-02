@@ -108,12 +108,26 @@ export function CompanySummary({
 
   // Auto-start once per company, only when the cache is known (not merely
   // pending) and turns out empty or stale — never races the initial GET.
+  //
+  // The ref is claimed only when a run actually starts, not on every pass
+  // that reaches this point. It used to be set before the empty/stale test,
+  // so the first effect that ran with the cache settled burned the slot for
+  // this company whether or not it generated anything — and because the
+  // component returns null while `chrome` is still loading, that pass
+  // routinely happened before there was a model to generate with. The card
+  // then sat on "No summary yet" forever, since no later pass could retry.
+  //
+  // `chromePending` is a dependency for the same reason: without a model the
+  // stream would 404, so waiting for chrome is part of "can we start", not a
+  // render-only concern.
   useEffect(() => {
-    if (!autoStart || cacheLoading || streaming || startedFor.current === companyId) return
+    if (!autoStart || chromePending || !chrome?.chat_model) return
+    if (cacheLoading || streaming || startedFor.current === companyId) return
+    if (cachedSummary && !cachedSummary.stale) return
     startedFor.current = companyId
-    if (!cachedSummary || cachedSummary.stale) void run()
+    void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart, cacheLoading, companyId, cachedSummary])
+  }, [autoStart, chromePending, chrome?.chat_model, cacheLoading, companyId, cachedSummary])
 
   // Silent while chrome is still loading (avoids a one-frame flash of the
   // "not configured" notice on every page load); once it's actually loaded

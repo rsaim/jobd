@@ -21,7 +21,11 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from jobd.domain.record import StageEvent, enforce_forward_order
+from jobd.domain.record import (
+    StageEvent,
+    enforce_forward_order,
+    onboarding_accepted_index,
+)
 from jobd.domain.timeline_extraction import (
     TIMELINE_MAX_TOKENS,
     TIMELINE_PROMPT,
@@ -40,14 +44,56 @@ class DeriveResult:
     skipped_empty: int = 0
     bad_evidence_index: int = 0
     events_dropped_backwards: int = 0
+    onboarding_accepted: int = 0
+    #: True when the derived timeline reached an offer or a post-offer
+    #: outcome. The record's headline fact per application, and what the
+    #: offer eval scores against the operator's own account of which offers
+    #: were real.
+    offer_signal: bool = False
     errors: list[str] = field(default_factory=list)
 
 
 def _chain(conn: Any, application_id: UUID) -> list[dict[str, Any]]:
+    """This application's mail, plus its company's unattached mail.
+
+    Messages that resolved to a company but to no application are included
+    when the company has a single application, and they are exactly the ones
+    that matter most here: an accepted offer is followed by onboarding,
+    payroll and (in the live corpus) two months of immigration-attorney
+    threads, none of which look like an application to the linker, so they
+    end up company-linked and application-less. 149 of 2,487 company-linked
+    messages sit in that state.
+
+    Dropping them cost a real answer: a "Welcome to <company>" thread was the
+    only evidence that one offer was ever extended -- the offer itself was
+    conveyed outside email -- and the derived timeline stopped at the
+    technical screen. The single-application guard is what keeps this honest:
+    with two or more applications at a company there is no way to tell which
+    one the loose mail belongs to, so it is left out rather than guessed at.
+    """
     rows = conn.execute(
-        "SELECT id, sent_at, direction, sender_address, subject, body_text FROM message"
-        " WHERE application_id = %s ORDER BY sent_at, id",
-        (application_id,),
+        """
+        WITH me AS (SELECT company_id FROM application WHERE id = %(app)s),
+        -- The company's applications that actually carry a conversation. A
+        -- one-message row is usually a stray (post-offer mail spawning a
+        -- role-less "application" -- the same artefact the app audit merges
+        -- away), and letting it count would strand the loose mail nobody can
+        -- claim. "Sole substantive application" is the honest test of
+        -- ownership, not "sole row".
+        substantive AS (
+            SELECT a.id FROM application a JOIN me ON a.company_id = me.company_id
+            WHERE (SELECT count(*) FROM message m2 WHERE m2.application_id = a.id) > 1
+        )
+        SELECT id, sent_at, direction, sender_address, subject, body_text
+        FROM message
+        WHERE application_id = %(app)s
+           OR (application_id IS NULL
+               AND company_id = (SELECT company_id FROM me)
+               AND (SELECT count(*) FROM substantive) = 1
+               AND %(app)s IN (SELECT id FROM substantive))
+        ORDER BY sent_at, id
+        """,
+        {"app": application_id},
     ).fetchall()
     return [
         {
@@ -102,14 +148,33 @@ def derive_stages(
             out.llm_calls += 1
         except Exception as exc:  # noqa: BLE001 — one bad chain must not stop the run
             out.errors.append(f"{app_id}: {type(exc).__name__}: {exc}")
-            continue
+            # A failed call is not a reason to discard evidence the free
+            # deterministic rule can still read. Onboarding mail proves the
+            # offer was accepted whether or not the model answered, and
+            # dropping the whole application loses that outright — live-caught
+            # against the operator's own offer list, where a truncated JSON
+            # response ("Unterminated string") was the *only* reason a real
+            # accepted offer went unrecorded. Degrade to the free tier
+            # instead: fewer stages than a good call would give, never a
+            # silently missing outcome.
+            payload = None
 
-        if not payload.get("related"):
+        if not isinstance(payload, dict):
+            # Strict json_schema mode still occasionally yields the wrong
+            # top-level shape -- a bare list of events instead of the object
+            # that wraps them. Treat it as a failed call rather than crashing
+            # the run: the deterministic onboarding rule below still reads the
+            # chain, so an accepted offer survives a malformed response.
+            if payload is not None:
+                out.errors.append(f"{app_id}: payload was {type(payload).__name__}")
+            payload = None
+
+        if payload is not None and not payload.get("related"):
             out.unrelated += 1
             continue
 
         events = []
-        for item in payload.get("events") or []:
+        for item in (payload or {}).get("events") or []:
             idx = item.get("evidence_index")
             if not isinstance(idx, int) or not 1 <= idx <= len(messages):
                 # The model cited a message that is not in the chain. Drop the
@@ -119,6 +184,22 @@ def derive_stages(
                 continue
             proof = messages[idx - 1]
             events.append((item["stage"], proof["sent_at"], proof["id"]))
+
+        # Onboarding proves the offer was accepted, and saying so is keyword
+        # matching rather than judgment -- so it is decided here instead of
+        # being left to the model, which answered "accepted" and then
+        # "technical" on successive calls over the identical chain at
+        # temperature 0. `enforce_forward_order` below drops whatever
+        # interview stages the model put after it.
+        onboarding_at = onboarding_accepted_index(
+            [m.get("subject") or "" for m in messages]
+        )
+        if onboarding_at is not None and not any(
+            stage == "accepted" for stage, _, _ in events
+        ):
+            proof = messages[onboarding_at]
+            events.append(("accepted", proof["sent_at"], proof["id"]))
+            out.onboarding_accepted += 1
 
         # Ordering is a fixed property of the vocabulary, so it is enforced
         # here rather than asked of the model: the timeline call reads the
@@ -137,6 +218,8 @@ def derive_stages(
             ]
         )
         out.events_dropped_backwards += len(events) - len(ordered)
+        if any(e.stage in ("offer", "accepted", "declined") for e in ordered):
+            out.offer_signal = True
 
         if not apply:
             out.events_written += len(ordered)

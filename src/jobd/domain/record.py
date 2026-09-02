@@ -12,6 +12,7 @@ thing worth being unable to represent.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -466,3 +467,48 @@ def enforce_forward_order[T: _HasStage](events: Sequence[T]) -> list[T]:
         highest = rank
         kept.append(event)
     return kept
+
+
+#: Subjects that mean employment administration — mail that only exists once
+#: someone has been hired. Deliberately excludes anything an interview
+#: generates: "final interview", "next steps" and availability requests all
+#: look advanced without proving anything.
+_ONBOARDING = re.compile(
+    r"\b(welcome\s+(?:to|aboard)|onboarding|new\s+hire|first\s+day|start\s+date|"
+    r"i-?9\b|w-?4\b|payroll|benefits\s+enrol|background\s+check|"
+    r"offer\s+letter|equity\s+grant|badge|laptop\s+setup|"
+    r"h-?1b|lca\s+posting|labor\s+condition|visa\s+(?:transfer|petition)|"
+    r"immigration|support\s+letter)\b",
+    re.I,
+)
+
+#: Contexts where the onboarding words above mean something else entirely —
+#: a marketing list welcoming a subscriber, not an employer welcoming a hire.
+_NOT_ONBOARDING = re.compile(r"\b(newsletter|subscri|community|webinar|waitlist)\b", re.I)
+
+
+def onboarding_accepted_index(subjects: Sequence[str]) -> int | None:
+    """Index of the first message that proves the offer was accepted, if any.
+
+    An offer is routinely extended by phone or e-signature and never lands in
+    the mailbox; what does land afterwards is employment administration — a
+    "Welcome to <company>" thread, payroll, I-9/W-4, and for a visa holder
+    months of H-1B/LCA attorney mail. That is conclusive, and recognising it
+    is keyword matching rather than judgment.
+
+    It is done here, in code, because the model is not dependable on it: on
+    one identical 33-message chain, successive calls at temperature 0
+    answered "accepted" and then "technical". A stage that decides an
+    application's outcome cannot be a coin flip, and a deterministic reading
+    re-derives the same record every time (I3).
+
+    The *earliest* match is returned: the offer was accepted when onboarding
+    began, not at the last piece of paperwork months later.
+    """
+    for i, subject in enumerate(subjects):
+        text = subject or ""
+        if _NOT_ONBOARDING.search(text):
+            continue
+        if _ONBOARDING.search(text):
+            return i
+    return None
