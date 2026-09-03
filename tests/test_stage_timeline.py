@@ -508,3 +508,41 @@ def test_named_offer_letters_survive():
         "Offer letter for review",
     ):
         assert _esign_subject_is_evidence(subject), subject
+
+
+# --- outreach invites you to apply; it is not an offer ----------------------
+#
+# "Join <company> (VC-backed)" is a recruiter's cold pitch -- the
+# invitation to APPLY, the opposite end of the funnel from an offer. The
+# model read "join" as being hired and put an offer on a company that never
+# made one, on an application holding a single message.
+#
+# Funnel history cannot decide this: three genuine offers on the live corpus
+# also had no prior funnel stage (an offer letter can be the first message
+# the mailbox ever sees for a role). What separates them is that every real
+# one names the offer -- "Congratulations on your offer", "Offer Letter" --
+# while the pitch names only the company.
+
+from jobd.services.derive_stages import _offer_subject_is_evidence
+
+
+def test_recruiter_pitch_is_not_an_offer():
+    for subject in (
+        "Join acme.dev (VC-backed)",
+        "Join ACME - we're hiring",
+        "Interested in a role at ACME?",
+        "Opportunity at ACME",
+    ):
+        assert not _offer_subject_is_evidence(subject), subject
+
+
+def test_real_offer_subjects_survive():
+    for subject in (
+        "Congratulations on your offer with ACME!",
+        "RE: Follow up - ACME - Offer - CANDIDATE",
+        "Official Legal name and address For Offer Letter",
+        "ACME offer declined",
+        "Your compensation package",
+        "Welcome aboard - start date confirmed",
+    ):
+        assert _offer_subject_is_evidence(subject), subject

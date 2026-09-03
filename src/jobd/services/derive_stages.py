@@ -129,6 +129,29 @@ _TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
 _CALENDAR_RSVP = re.compile(r"(accepted|declined|tentative):\s", re.I)
 
 
+#: What a real offer names. Every genuine `offer` on the live corpus said so
+#: in its subject -- the offer, the letter, the congratulations, the package,
+#: or the start of employment. Recruiter outreach ("Join <company>") names
+#: only the company, and reading that as an offer put one on a company that
+#: never made it.
+_OFFER_EVIDENCE = re.compile(
+    r"\b(offer|congrat|welcome|onboard|hire[dn]?\b|start\s+date|"
+    r"compensation|salary|equity|counter[- ]?sign|employment)\b",
+    re.I,
+)
+
+
+def _offer_subject_is_evidence(subject: str | None) -> bool:
+    """Whether a subject can support an `offer` claim at all.
+
+    Funnel history cannot decide this: three genuine offers on the live
+    corpus had no prior funnel stage, because an offer letter can be the
+    first message the mailbox ever holds for a role. The subject can -- a
+    real offer names itself, an invitation to apply names only the company.
+    """
+    return bool(_OFFER_EVIDENCE.search(subject or ""))
+
+
 #: Senders that deliver documents on someone else's behalf. They carry real
 #: offer letters, so the sender alone decides nothing -- the subject does.
 _ESIGN_SENDERS = re.compile(r"(docusign|hellosign|adobesign|pandadoc|signnow)", re.I)
@@ -249,6 +272,14 @@ def derive_stages(
                 out.bad_evidence_index += 1
                 continue
             proof = messages[idx - 1]
+            if item["stage"] == "offer" and not _offer_subject_is_evidence(
+                proof.get("subject")
+            ):
+                # Nothing in this subject says an offer was made. The clearest
+                # case is recruiter outreach -- "Join <company>" is the
+                # invitation to apply, not the result of applying.
+                out.bad_evidence_index += 1
+                continue
             if (
                 item["stage"] in ("offer", "accepted")
                 and _ESIGN_SENDERS.search(proof.get("sender_address") or "")
