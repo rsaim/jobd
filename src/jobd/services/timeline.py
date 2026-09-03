@@ -24,6 +24,7 @@ from jobd.domain.record import (
     Stage,
     collapse_stage_runs,
     is_ghosted,
+    latest_batch,
     resolve_stage_window,
 )
 
@@ -57,6 +58,12 @@ class Claim:
     evidence_direction: Direction
     confidence: float | None
     extracted_by: str
+    #: The derivation batch this claim came from; None for rows written
+    #: before batches were tracked. `latest_batch` reads it, and it is what
+    #: lets a re-derivation append rather than destroy (see domain.record).
+    derived_at: datetime | None = None
+    #: Set by `build` so `latest_batch` can group without a second lookup.
+    application_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +170,8 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
     # only; it asserts no ordering the record does not already have.
     claims = conn.execute(
         "SELECT s.application_id, s.stage, s.occurred_at, s.evidence_message_id,"
-        "       m.subject, m.direction, s.confidence, s.extracted_by"
+        "       m.subject, m.direction, s.confidence, s.extracted_by,"
+        "       s.derived_at"
         " FROM stage_event s"
         # Inner join: structurally, no claim can be emitted without evidence.
         " JOIN message m ON m.id = s.evidence_message_id"
@@ -198,6 +206,8 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
                 evidence_direction=claim[5],
                 confidence=None if claim[6] is None else float(claim[6]),
                 extracted_by=claim[7],
+                derived_at=claim[8],
+                application_id=UUID(str(claim[0])),
             )
         )
 
@@ -218,6 +228,15 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
     #
     # Live corpus: 833 raw rows -> 377 claims, and stage regressions (a
     # timeline stepping backwards through the funnel) 193 -> 46.
+    # Stage events are append-only, so an application that has been derived
+    # more than once carries every generation. Show exactly one -- the newest
+    # -- before any reducing: rendering the union would put a corrected
+    # timeline inside the oscillating one it was written to replace, which is
+    # the bug this ordering exists to prevent.
+    by_application = {
+        app_id: latest_batch(app_claims)
+        for app_id, app_claims in by_application.items()
+    }
     by_application = {
         app_id: collapse_stage_runs(resolve_stage_window(collapse_stage_runs(app_claims)))
         for app_id, app_claims in by_application.items()

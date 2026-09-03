@@ -512,3 +512,46 @@ def onboarding_accepted_index(subjects: Sequence[str]) -> int | None:
         if _ONBOARDING.search(text):
             return i
     return None
+
+
+def latest_batch[T](rows: Sequence[T]) -> list[T]:
+    """Keep only each application's newest derivation, discarding older ones.
+
+    Stage events are append-only: a run stamps its rows with the batch that
+    produced them (`derived_at`) and never deletes what came before, so
+    re-deriving a timeline is an insert and correcting a bad pass is another
+    insert. That leaves several generations on the table, and a reader must
+    show exactly one -- the newest -- or it renders the union and puts a good
+    timeline inside the oscillating one it replaced.
+
+    Grouping is per **application**, not per company or per table: different
+    applications are derived by different runs (one may have errored, another
+    may never have been reached), and taking a global maximum would blank out
+    every application the newest run did not touch.
+
+    A `derived_at` of ``None`` marks rows written before batches were tracked.
+    They rank oldest, so any real derivation supersedes them, while an
+    application that no derivation has reached still shows what it always did.
+    """
+    newest: dict[Any, Any] = {}
+    for row in rows:
+        app = row.application_id  # type: ignore[attr-defined]
+        stamp = getattr(row, "derived_at", None)
+        current = newest.get(app, _MISSING)
+        if current is _MISSING:
+            newest[app] = stamp
+        elif current is None:
+            if stamp is not None:
+                newest[app] = stamp
+        elif stamp is not None and stamp > current:
+            newest[app] = stamp
+    return [
+        row
+        for row in rows
+        if getattr(row, "derived_at", None)
+        == newest[row.application_id]  # type: ignore[attr-defined]
+    ]
+
+
+#: Sentinel distinguishing "no row seen yet" from a legitimate NULL batch.
+_MISSING = object()

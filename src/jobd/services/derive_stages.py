@@ -123,6 +123,9 @@ def derive_stages(
     `jobd distill`'s `--apply`.
     """
     out = DeriveResult()
+    # One stamp for the whole run, so every application derived together
+    # shares a batch and "the newest batch" is unambiguous per application.
+    batch_at = conn.execute("SELECT now()").fetchone()[0]
     if application_id is not None:
         targets = [application_id]
     else:
@@ -225,25 +228,37 @@ def derive_stages(
             out.events_written += len(ordered)
             continue
 
-        removed = conn.execute(
-            "DELETE FROM stage_event WHERE application_id = %s"
-            " AND extracted_by = 'timeline'",
-            (app_id,),
-        ).rowcount
-        out.events_replaced += removed or 0
+        if not ordered:
+            # Nothing derived -- a failed call with no onboarding signal, or a
+            # chain that genuinely evidences no stage. Leave whatever is on
+            # record alone rather than emptying the application.
+            continue
+
+        # Append. A derivation never destroys the one before it: rows carry
+        # the batch that produced them (`derived_at`) and readers take the
+        # newest batch per application, so re-deriving is a pure insert and
+        # correcting a bad pass costs nothing but another one. That keeps this
+        # table consistent with how the rest of the system stores things --
+        # raw mail is write-once and Postgres is a derived view of it (I3) --
+        # and it preserves what an earlier pass concluded, which is precisely
+        # what you want to look at when a derivation turns out to be wrong.
+        #
+        # Nothing is written for an application this pass could not derive (a
+        # failed call with no onboarding signal, or a chain evidencing no
+        # stage): no new batch means the previous one stays newest, so the
+        # record keeps whatever it already showed instead of going blank.
         for event in ordered:
             conn.execute(
                 "INSERT INTO stage_event (application_id, stage, occurred_at,"
-                " evidence_message_id, extracted_by)"
-                " VALUES (%s, %s, %s, %s, 'timeline')"
-                " ON CONFLICT (application_id, stage, evidence_message_id)"
-                " DO UPDATE SET occurred_at = EXCLUDED.occurred_at,"
-                "               extracted_by = EXCLUDED.extracted_by",
+                " evidence_message_id, extracted_by, derived_at)"
+                " VALUES (%s, %s, %s, %s, 'timeline', %s)"
+                " ON CONFLICT DO NOTHING",
                 (
                     app_id,
                     event.stage,
                     event.occurred_at,
                     event.evidence_message_id,
+                    batch_at,
                 ),
             )
             out.events_written += 1
