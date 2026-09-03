@@ -66,6 +66,24 @@ class LiteLLMProvider:
         self.cost_usd = 0.0
         self.calls = 0
         self._timeout = timeout
+        # LiteLLM's `timeout=` governs its own request handling, and it is not
+        # sufficient on its own: a response that stalls *mid-body* leaves the
+        # process parked in `_ssl__SSLSocket_read` -> `poll` with no deadline
+        # to fire, and nothing upstream notices. Live-caught on a 461-item
+        # derive run -- the process sat with 5.6s of CPU across 30 minutes,
+        # its Postgres connection `idle in transaction`, waiting on a socket
+        # that was never going to answer.
+        #
+        # A default socket timeout is the only ceiling that reaches that read.
+        # It is process-global by nature, so it is set to a generous multiple
+        # of the request timeout: high enough never to interrupt a call this
+        # provider would still be waiting on legitimately, low enough that a
+        # dead connection surfaces as an error the run can skip past instead
+        # of hanging on forever.
+        import socket
+
+        if socket.getdefaulttimeout() is None:
+            socket.setdefaulttimeout(max(timeout * 3, 180.0))
         # Every schema this provider is asked for — EXTRACTION_SCHEMA,
         # VERIFICATION_SCHEMA — is a small, bounded JSON object, but capping
         # too tight backfires: VERIFICATION_SCHEMA's reasoning/

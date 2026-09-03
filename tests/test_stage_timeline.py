@@ -273,3 +273,48 @@ def test_welcome_to_the_team_newsletter_is_not_onboarding() -> None:
 
 def test_empty_chain() -> None:
     assert onboarding_accepted_index([]) is None
+
+
+# --- ambiguous onboarding keywords need corroboration -----------------------
+#
+# Immigration/visa/background-check words appear on BOTH sides of the hire
+# line: an employer files an H-1B for someone who accepted, and a recruiter
+# asks about sponsorship during screening. Matching them alone read a
+# pre-screen questionnaire as an acceptance on a real mailbox, for an
+# application that was rejected three weeks later.
+
+def test_sponsorship_question_is_not_acceptance():
+    assert onboarding_accepted_index(
+        ["Immigration Sponsorship Assessment (Voluntary)"]
+    ) is None
+
+
+def test_visa_screening_question_is_not_acceptance():
+    assert onboarding_accepted_index(
+        ["Quick question: will you require visa sponsorship?"]
+    ) is None
+
+
+def test_background_check_alone_is_not_acceptance():
+    assert onboarding_accepted_index(["Background check authorization"]) is None
+
+
+def test_visa_step_after_welcome_is_acceptance():
+    # Visa step corroborated by "Welcome" in the same subject.
+    assert onboarding_accepted_index(["Welcome to Acme & Visa Next Steps"]) == 0
+
+
+def test_immigration_filing_with_petition_is_acceptance():
+    # An actual USCIS filing, not a sponsorship question.
+    assert onboarding_accepted_index(
+        ["Candidate: ACME LLC / US-H1B USCIS COE Petition Filed"]
+    ) == 0
+
+
+def test_unambiguous_onboarding_still_stands_alone():
+    for subject in (
+        "Welcome to Acme Corp!",
+        "Acme Onboarding | Next Steps",
+        "Requesting Draft Offer Letter",
+    ):
+        assert onboarding_accepted_index([subject]) == 0, subject

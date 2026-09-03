@@ -473,16 +473,37 @@ def enforce_forward_order[T: _HasStage](events: Sequence[T]) -> list[T]:
 #: someone has been hired. Deliberately excludes anything an interview
 #: generates: "final interview", "next steps" and availability requests all
 #: look advanced without proving anything.
+#: Subjects that mean the offer was accepted on their own. An employer only
+#: says these to someone who already said yes.
 _ONBOARDING = re.compile(
     r"\b(welcome\s+(?:to|aboard)|onboarding|new\s+hire|first\s+day|start\s+date|"
-    r"i-?9\b|w-?4\b|payroll|benefits\s+enrol|background\s+check|"
-    r"offer\s+letter|equity\s+grant|badge|laptop\s+setup|"
-    r"h-?1b|lca\s+posting|labor\s+condition|visa\s+(?:transfer|petition)|"
-    r"immigration|support\s+letter)\b",
+    r"i-?9\b|w-?4\b|payroll|benefits\s+enrol|"
+    r"offer\s+letter|equity\s+grant|badge|laptop\s+setup)\b",
     re.I,
 )
 
-#: Contexts where the onboarding words above mean something else entirely —
+#: Words that sit on BOTH sides of the hire line. An employer files an H-1B
+#: for someone who accepted -- and a recruiter asks about sponsorship during
+#: screening, months before any offer. Matching these alone read a
+#: "Immigration Sponsorship Assessment (Voluntary)" pre-screen as an
+#: acceptance for an application that was rejected weeks later, so they
+#: only count when :data:`_ONBOARDING` or :data:`_CORROBORATION` also fires.
+_AMBIGUOUS = re.compile(
+    r"\b(h-?1b|lca\s+posting|labor\s+condition|visa\s+(?:transfer|petition)|"
+    r"immigration|support\s+letter|background\s+check)\b",
+    re.I,
+)
+
+#: What turns an ambiguous word into a real acceptance: the paperwork is being
+#: *filed or completed*, not asked about. "Petition filed" is an employer
+#: acting on a hire; "do you need sponsorship?" is a question to a candidate.
+_CORROBORATION = re.compile(
+    r"\b(filed|approved|receipt\s+notice|uscis|petition|congratulations|"
+    r"congrats|signed|countersigned|accepted|next\s+steps|employee)\b",
+    re.I,
+)
+
+#: Contexts where the onboarding words above mean something else entirely --
 #: a marketing list welcoming a subscriber, not an employer welcoming a hire.
 _NOT_ONBOARDING = re.compile(r"\b(newsletter|subscri|community|webinar|waitlist)\b", re.I)
 
@@ -510,6 +531,14 @@ def onboarding_accepted_index(subjects: Sequence[str]) -> int | None:
         if _NOT_ONBOARDING.search(text):
             continue
         if _ONBOARDING.search(text):
+            return i
+        # An ambiguous word counts when the paperwork is being filed rather
+        # than asked about -- in this subject, or anywhere earlier in the
+        # chain, since a thread reply carries its predecessor's context.
+        if _AMBIGUOUS.search(text) and (
+            _CORROBORATION.search(text)
+            or any(_CORROBORATION.search(s) for s in subjects[:i])
+        ):
             return i
     return None
 
