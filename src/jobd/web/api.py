@@ -576,6 +576,27 @@ def offers() -> dict[str, Any]:
         return {"offers": [_briefing(r) for r in dashboard.offers(conn, limit=200)]}
 
 
+@router.get("/waiting")
+def waiting() -> dict[str, Any]:
+    """Every company whose last message came *in* — your reply is owed.
+
+    Home carries the same list bounded to a briefing (25 rows, 120 days).
+    This is the whole backlog, which is a different job: Home answers "what
+    should I do today", this answers "who am I still on the hook for", and
+    582 rows would drown the first question while a 25-row cap would answer
+    the second wrongly.
+    """
+    with _connect() as conn:
+        return {
+            "waiting": [
+                _briefing(r)
+                for r in dashboard.awaiting_your_reply(
+                    conn, within_days=None, limit=500
+                )
+            ]
+        }
+
+
 @router.get("/rejections")
 def rejections() -> dict[str, Any]:
     """Every application the company said no to — its own address, same

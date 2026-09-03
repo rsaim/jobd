@@ -1,15 +1,22 @@
 /**
- * Every offer ever received — live ones still needing a decision, and
- * resolved ones kept for the record. Its own page, not a Home section: an
- * offer is a decision, and In flight already shows it among five other
- * mid-process stages (services/dashboard.py's offers() docstring).
+ * Every offer ever received, one list, newest first.
+ *
+ * It used to split into "Awaiting your decision" and "Resolved". The split
+ * asked the reader to hold two lists to answer one question -- what offers
+ * have I had -- and the same company could sit in either depending on a
+ * stage transition it had no control over. The stage is on each row, which
+ * is where a per-row fact belongs; a heading is the wrong instrument for it.
+ *
+ * Its own page, not a Home section: an offer is a decision, and In flight
+ * already shows it among five other mid-process stages
+ * (services/dashboard.py's offers() docstring).
  */
 
 import { Award } from "lucide-react"
 
 import { useOffers } from "@/lib/api"
 import { BriefingGrid } from "@/components/briefing-grid"
-import { EmptyState, ErrorState, Loading, PageHead, SectionHead } from "@/components/page"
+import { EmptyState, ErrorState, Loading, PageHead } from "@/components/page"
 
 export function OffersPage() {
   const { data, isPending, error } = useOffers()
@@ -17,8 +24,7 @@ export function OffersPage() {
   if (error) return <ErrorState error={error} />
 
   const { offers } = data
-  const open = offers.filter((row) => row.status === "offer")
-  const resolved = offers.filter((row) => row.status !== "offer")
+  const companies = new Set(offers.map((row) => row.canonical_name)).size
 
   return (
     <div className="space-y-2">
@@ -27,9 +33,9 @@ export function OffersPage() {
         eyebrow="The search, today"
         title="Offers"
         lede={
-          open.length
-            ? `${open.length} open, waiting on a decision. ${resolved.length} already resolved.`
-            : `Nothing open right now. ${resolved.length} resolved.`
+          offers.length
+            ? `${companies} ${companies === 1 ? "company" : "companies"} extended an offer, across ${offers.length} ${offers.length === 1 ? "application" : "applications"}.`
+            : "Nothing in the record has reached the offer stage."
         }
       />
 
@@ -38,25 +44,10 @@ export function OffersPage() {
           Nothing in the record has reached the offer stage.
         </EmptyState>
       ) : (
-        <>
-          {open.length > 0 && (
-            <>
-              <SectionHead icon={Award} count={open.length}>
-                Awaiting your decision
-              </SectionHead>
-              <BriefingGrid rows={open} showStage={false} />
-            </>
-          )}
-
-          {resolved.length > 0 && (
-            <>
-              <SectionHead icon={Award} count={resolved.length}>
-                Resolved
-              </SectionHead>
-              <BriefingGrid rows={resolved} showStage={false} />
-            </>
-          )}
-        </>
+        /* `showStage` on: with one list the stage is what tells a live offer
+           from a resolved one, and it is the reading the two headings used
+           to carry. */
+        <BriefingGrid rows={offers} showStage />
       )}
     </div>
   )

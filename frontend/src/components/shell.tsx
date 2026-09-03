@@ -25,6 +25,7 @@
 import { Link, useLocation } from "react-router-dom"
 import {
   Award,
+  Reply,
   Building2,
   Filter,
   Gauge,
@@ -74,6 +75,14 @@ const NAV = [
       // reply, what is about to go cold — and its name should say so. The
       // sunrise icon matches the page's own header.
       { to: "/", label: "Today", icon: Sunrise, match: (p: string) => p === "/" },
+      // Directly under Today: this is the one list that is entirely work
+      // owed, so it sits where you look after asking what today holds.
+      {
+        to: "/waiting",
+        label: "Review",
+        icon: Reply,
+        match: (p: string) => p.startsWith("/waiting"),
+      },
       {
         to: "/companies",
         label: "Companies",

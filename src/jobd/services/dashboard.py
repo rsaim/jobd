@@ -1908,13 +1908,23 @@ def _briefing_rows(rows: list[tuple[Any, ...]]) -> list[BriefingRow]:
 
 
 def awaiting_your_reply(
-    conn: psycopg.Connection[Any], *, within_days: int = 120, limit: int = 25
+    conn: psycopg.Connection[Any],
+    *,
+    within_days: int | None = 120,
+    limit: int = 25,
+    include_terminal: bool = False,
 ) -> list[BriefingRow]:
     """Companies whose last message came *in* — their ball is in your court.
 
-    Bounded by recency on purpose. 124 companies are technically "your turn",
-    but most were last touched over a year ago; an unbounded list is a backlog,
-    not a briefing.
+    Home bounds this by recency on purpose: most of the companies that are
+    technically "your turn" were last touched over a year ago, and an
+    unbounded list is a backlog rather than a briefing. The Review tab is
+    where that backlog belongs, so `within_days=None` lifts the window and
+    the caller decides which of the two it wants.
+
+    `include_terminal` keeps companies whose process already ended. Off by
+    default: a rejection you never answered is not work, and the whole point
+    of the list is what still needs a reply.
     """
     rows = conn.execute(
         """
@@ -1926,10 +1936,17 @@ def awaiting_your_reply(
             ORDER BY m.company_id, m.sent_at DESC
         ),
         latest_stage AS (
-            SELECT DISTINCT ON (a.company_id) a.company_id, s.stage
+            -- Current generation only. This decides which companies are
+            -- dropped as finished, so reading a superseded generation would
+            -- hide a live process behind a stage the derivation withdrew --
+            -- 33 companies' latest stage differs between the two reads.
+            SELECT DISTINCT ON (a.company_id) a.company_id, se.stage
             FROM application a
-            JOIN stage_event s ON s.application_id = a.id
-            ORDER BY a.company_id, s.occurred_at DESC
+            JOIN stage_event se ON se.application_id = a.id
+             AND (CASE WHEN a.derived_at IS NULL
+                       THEN se.derived_at IS NULL
+                       ELSE se.derived_at = a.derived_at END)
+            ORDER BY a.company_id, se.occurred_at DESC
         )
         SELECT c.id, c.canonical_name, c.kind, lm.application_id, a.role_title,
                ls.stage, lm.sent_at, lm.subject,
@@ -1939,14 +1956,17 @@ def awaiting_your_reply(
         LEFT JOIN application a ON a.id = lm.application_id
         LEFT JOIN latest_stage ls ON ls.company_id = c.id
         WHERE lm.direction = 'inbound'
-          AND lm.sent_at >= now() - make_interval(days => %(within)s)
-          AND (ls.stage IS NULL OR NOT (ls.stage = ANY(%(terminal)s)))
+          AND (%(within)s::int IS NULL
+               OR lm.sent_at >= now() - make_interval(days => %(within)s::int))
+          AND (%(include_terminal)s
+               OR ls.stage IS NULL OR NOT (ls.stage = ANY(%(terminal)s)))
         ORDER BY lm.sent_at DESC
         LIMIT %(limit)s
         """,
         {
             "within": within_days,
             "terminal": sorted(TERMINAL_STAGES),
+            "include_terminal": include_terminal,
             "limit": limit,
         },
     ).fetchall()
@@ -2120,10 +2140,37 @@ def offers(conn: psycopg.Connection[Any], *, limit: int = 50) -> list[BriefingRo
                     WHERE m.application_id IS NOT NULL
                     ORDER BY m.application_id, m.sent_at DESC
                 ),
+                -- An offer either left an `offer` event or is implied by
+                -- one: you cannot accept or decline an offer nobody made.
+                -- Requiring the literal row hid two real offers -- an
+                -- acceptance recorded without a separate offer event, and a
+                -- decline after a full interview process -- because the
+                -- chain evidenced the ending more clearly than the moment.
+                --
+                -- The inference is the same one the funnel already makes,
+                -- and it carries the same corroboration: a direct employer
+                -- (an agency's own accepted/declined is about its pitch,
+                -- not an offer) that actually ran a process. Without that
+                -- gate "thanks, I'll pass" on a cold recruiter mail becomes
+                -- a declined offer.
                 offered AS (
                     SELECT DISTINCT se.application_id FROM stage_event se
                     JOIN application a ON a.id = se.application_id
                     WHERE se.stage = 'offer' AND {current}
+                    UNION
+                    SELECT DISTINCT se.application_id FROM stage_event se
+                    JOIN application a ON a.id = se.application_id
+                    WHERE se.stage IN ('accepted', 'declined') AND {current}
+                      AND EXISTS (
+                          SELECT 1 FROM stage_event si
+                          JOIN application sa ON sa.id = si.application_id
+                          WHERE si.application_id = se.application_id
+                            AND si.stage IN ('recruiter_screen', 'phone_screen',
+                                             'technical', 'onsite')
+                            AND (CASE WHEN sa.derived_at IS NULL
+                                      THEN si.derived_at IS NULL
+                                      ELSE si.derived_at = sa.derived_at END)
+                      )
                 )
                 SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
                        ls.stage, lm.sent_at, lm.subject,

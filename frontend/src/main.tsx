@@ -26,6 +26,7 @@ import { CompanyPage } from "@/pages/company"
 import { ContactPage } from "@/pages/contact"
 import { MessagesPage } from "@/pages/messages"
 import { OffersPage } from "@/pages/offers"
+import { WaitingPage } from "@/pages/waiting"
 import { RejectionsPage } from "@/pages/rejections"
 import { PipelinePage } from "@/pages/pipeline"
 import { SearchPage } from "@/pages/search"
@@ -94,6 +95,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/messages" element={<MessagesPage />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/offers" element={<OffersPage />} />
+              <Route path="/waiting" element={<WaitingPage />} />
               <Route path="/rejections" element={<RejectionsPage />} />
               <Route path="/triage" element={<TriagePage />} />
               <Route path="/pipeline" element={<PipelinePage />} />

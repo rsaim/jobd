@@ -506,6 +506,14 @@ export const useOffers = () =>
     queryFn: () => get<{ offers: BriefingRow[] }>("/offers"),
   })
 
+/** Its own page (pages/waiting.tsx) — the whole backlog of companies owed a
+ *  reply, where `/home`'s `waiting` is the recency-bounded briefing slice. */
+export const useWaiting = () =>
+  useQuery({
+    queryKey: ["waiting"],
+    queryFn: () => get<{ waiting: BriefingRow[] }>("/waiting"),
+  })
+
 /** Its own page (pages/rejections.tsx), mirroring `useOffers`. */
 export const useRejections = () =>
   useQuery({
