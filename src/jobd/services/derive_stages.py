@@ -129,6 +129,37 @@ _TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
 _CALENDAR_RSVP = re.compile(r"(accepted|declined|tentative):\s", re.I)
 
 
+#: A greeting that welcomes you somewhere -- the strongest single signal that
+#: an offer was accepted, and the one a product blast imitates exactly.
+_WELCOME = re.compile(r"\bwelcome\s+to\b", re.I)
+
+
+def welcome_names_company(subject: str | None, company: str) -> bool:
+    """Whether a "welcome to X" names the employer whose chain it sits in.
+
+    "Welcome to <Product>! Getting Started" welcomed the operator to a company's
+    *product*, and scored as an accepted job offer -- "welcome to" is
+    unambiguous enough to stand alone, so no corroboration rule saw it. What
+    separates it from the real ones is not a keyword: every genuine welcome
+    named its employer, and this one named a tool.
+
+    Subjects that never say "welcome to" are out of scope and pass: offer
+    letters and onboarding paperwork are judged by the rules above.
+    """
+    text = subject or ""
+    if not _WELCOME.search(text):
+        return True
+    lowered = text.lower()
+    # Any significant word of the company name appearing is enough -- "Welcome
+    # to Initech" must satisfy "Initech Global", and "Welcome to Acme" must satisfy
+    # "Acme Corp Inc".
+    return any(
+        word in lowered
+        for word in (w.lower() for w in company.split())
+        if len(word) > 2 and word.lower() not in {"inc", "llc", "ltd", "the", "and"}
+    )
+
+
 #: What a real offer names. Every genuine `offer` on the live corpus said so
 #: in its subject -- the offer, the letter, the congratulations, the package,
 #: or the start of employment. Recruiter outreach ("Join <company>") names
@@ -226,6 +257,14 @@ def derive_stages(
 
     for app_id in targets:
         messages = _chain(conn, app_id)
+        # Needed to tell "Welcome to <employer>" from "Welcome to <product>",
+        # which no keyword can separate -- see welcome_names_company.
+        company_row = conn.execute(
+            "SELECT c.canonical_name FROM application a"
+            " JOIN company c ON c.id = a.company_id WHERE a.id = %s",
+            (app_id,),
+        ).fetchone()
+        company_name = company_row[0] if company_row else ""
         if not messages:
             out.skipped_empty += 1
             continue
@@ -272,6 +311,14 @@ def derive_stages(
                 out.bad_evidence_index += 1
                 continue
             proof = messages[idx - 1]
+            if item["stage"] == "accepted" and not welcome_names_company(
+                proof.get("subject"), company_name
+            ):
+                # "Welcome to <product>" on a company's chain welcomes the
+                # operator to a tool, not a job. Every real welcome named its
+                # employer.
+                out.bad_evidence_index += 1
+                continue
             if item["stage"] == "offer" and not _offer_subject_is_evidence(
                 proof.get("subject")
             ):
@@ -352,8 +399,11 @@ def derive_stages(
             stage == "accepted" for stage, _, _ in events
         ):
             proof = messages[onboarding_at]
-            events.append(("accepted", proof["sent_at"], proof["id"]))
-            out.onboarding_accepted += 1
+            # This rule matches "Welcome to <product>" as readily as the model
+            # does, so guarding only the model's path would leave the claim.
+            if welcome_names_company(proof.get("subject"), company_name):
+                events.append(("accepted", proof["sent_at"], proof["id"]))
+                out.onboarding_accepted += 1
 
         # Ordering is a fixed property of the vocabulary, so it is enforced
         # here rather than asked of the model: the timeline call reads the

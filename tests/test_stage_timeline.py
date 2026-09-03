@@ -546,3 +546,34 @@ def test_real_offer_subjects_survive():
         "Welcome aboard - start date confirmed",
     ):
         assert _offer_subject_is_evidence(subject), subject
+
+
+# --- a welcome must name the company it welcomes you to ---------------------
+#
+# "Welcome to <Product>! Getting Started" is product onboarding -- the
+# product is the company's tool, not the company -- and it read as a job
+# offer. "Welcome to" sits in the unambiguous tier, so the corroboration
+# guard never saw it; what catches this is that a real welcome names the
+# employer whose chain it is filed under, and this one does not.
+
+from jobd.services.derive_stages import welcome_names_company
+
+
+def test_welcome_to_a_product_is_not_employment():
+    assert not welcome_names_company("Welcome to Widget! Getting Started", "Acme AI")
+
+
+def test_welcome_naming_the_employer_is_employment():
+    for subject, company in (
+        ("Re: Welcome to Acme, Candidate!", "Acme"),
+        ("Welcome to Acme & Visa Next Steps", "Acme Global"),
+        ("Congrats and Welcome to Acme!", "Acme"),
+    ):
+        assert welcome_names_company(subject, company), subject
+
+
+def test_non_welcome_subjects_are_not_judged_here():
+    # Onboarding paperwork that never says "welcome" is out of scope: the
+    # check only applies to a welcome, which is what can address a product.
+    for subject in ("Requesting Draft Offer Letter", "Onboarding Next Steps"):
+        assert welcome_names_company(subject, "Acme"), subject
