@@ -225,6 +225,49 @@ def _outbound_offer_is_evidence(subject: str | None) -> bool:
     return bool(_OFFER_PAPERWORK.search(subject or ""))
 
 
+def should_mark_derived(*, answered: bool, wrote_rows: bool) -> bool:
+    """Whether this pass reached a conclusion worth recording on the record.
+
+    A pass that wrote stages plainly did. So did one that answered and
+    withdrew every stage -- "this chain evidences nothing" is a verdict, and
+    it is the case with no row to carry a batch stamp, which is why the stamp
+    lives on the application at all.
+
+    A failed model call is the exception. It degrades to the deterministic
+    onboarding rule and so knows strictly less than the pass before it;
+    reading its silence as "no stages" would let a single timeout erase a real
+    offer. It stamps only when that free-tier rule still found evidence and
+    wrote something, because then the rows it wrote are the generation to
+    show.
+    """
+    return answered or wrote_rows
+
+
+def _mark_derived(conn: Any, app_id: Any, batch_at: Any) -> None:
+    """Record that this batch reached this application, whatever it concluded.
+
+    Migration 0031 stamped the batch on each `stage_event`, which makes "no
+    derivation has run here" and "a derivation ran and withdrew every stage"
+    the same absence -- there is no row to carry a stamp. Readers then keep
+    showing the superseded per-message rows for an application the current
+    pipeline deliberately says nothing about.
+
+    Withdrawing a claim is a conclusion, so it belongs on the record. Stamping
+    the application makes the two absences distinguishable and lets a reader
+    suppress legacy rows for anything derived while leaving untouched
+    applications alone.
+
+    Only a pass that actually reached a conclusion may stamp: a failed model
+    call degrades to the deterministic rule and knows less than the run
+    before it, so treating its silence as "no stages" would let one timeout
+    erase a real offer. Callers stamp on a genuine answer and skip on a
+    degraded one.
+    """
+    conn.execute(
+        "UPDATE application SET derived_at = %s WHERE id = %s", (batch_at, app_id)
+    )
+
+
 def derive_stages(
     conn: Any,
     llm: Any,
@@ -299,6 +342,12 @@ def derive_stages(
 
         if payload is not None and not payload.get("related"):
             out.unrelated += 1
+            # A model that read the chain and called it unrelated has
+            # concluded something: whatever stages an earlier pass recorded
+            # here are withdrawn. Stamp so readers stop showing them.
+            if apply and should_mark_derived(answered=True, wrote_rows=False):
+                _mark_derived(conn, app_id, batch_at)
+                conn.commit()
             continue
 
         events = []
@@ -430,9 +479,24 @@ def derive_stages(
             continue
 
         if not ordered:
-            # Nothing derived -- a failed call with no onboarding signal, or a
-            # chain that genuinely evidences no stage. Leave whatever is on
-            # record alone rather than emptying the application.
+            # Nothing derived. Two different situations share this branch and
+            # they deserve opposite treatment.
+            #
+            # A failed call fell back to the deterministic rule and found no
+            # onboarding signal. This pass knows strictly less than whatever
+            # ran before it, so its silence is ignorance, not a verdict --
+            # stamping here would let one timeout erase a real offer.
+            #
+            # A call that answered and evidenced no stage has concluded
+            # something: any stage an earlier pass recorded here is withdrawn.
+            # Stamp the application so readers stop showing those rows. There
+            # is no stage_event to carry the batch, which is the whole reason
+            # the stamp lives on the application.
+            if apply and should_mark_derived(
+                answered=payload is not None, wrote_rows=False
+            ):
+                _mark_derived(conn, app_id, batch_at)
+                conn.commit()
             continue
 
         # Append. A derivation never destroys the one before it: rows carry
@@ -463,6 +527,9 @@ def derive_stages(
                 ),
             )
             out.events_written += 1
+        # Stamp alongside the rows so every derived application is marked the
+        # same way, whether this pass wrote stages or withdrew them all.
+        _mark_derived(conn, app_id, batch_at)
         conn.commit()
 
     return out

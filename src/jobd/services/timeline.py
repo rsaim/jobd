@@ -178,6 +178,13 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
         " JOIN message m ON m.id = s.evidence_message_id"
         " JOIN application a ON a.id = s.application_id"
         " WHERE a.company_id = %s"
+        # An application a derivation has reached shows that derivation and
+        # nothing else -- its legacy per-message rows are superseded even
+        # where the derivation withdrew every stage and left no row of its own
+        # to out-rank them. `latest_batch` below still picks the newest batch;
+        # it reads rows, so it cannot see a conclusion that wrote none.
+        " AND (CASE WHEN a.derived_at IS NULL THEN s.derived_at IS NULL"
+        "          ELSE s.derived_at IS NOT NULL END)"
         " ORDER BY s.occurred_at, array_position(%s::text[], s.stage)",
         (company_id, list(STAGE_ORDER)),
     ).fetchall()

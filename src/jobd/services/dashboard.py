@@ -230,10 +230,18 @@ def list_companies(
         -- ones -- and a company shows an `accepted` its current timeline
         -- dropped. Live: an ex-employer's exit paperwork put 17 false
         -- `accepted` rows on the dashboard while its timeline showed none.
+        --
+        -- `a.derived_at` decides which generation an application is showing.
+        -- Once a derivation has reached it, only that derivation's rows count
+        -- and the legacy ones are gone for good -- including when it withdrew
+        -- every stage and left no row to out-rank them. An application no
+        -- derivation has reached keeps showing what it always showed.
         LEFT JOIN stage_event s ON s.application_id = a.id
-            AND s.derived_at IS NOT DISTINCT FROM (
-                SELECT max(s2.derived_at) FROM stage_event s2
-                WHERE s2.application_id = s.application_id
+            AND (
+                CASE WHEN a.derived_at IS NULL
+                     THEN s.derived_at IS NULL
+                     ELSE s.derived_at = a.derived_at
+                END
             )
         {where}
         GROUP BY c.id{having}

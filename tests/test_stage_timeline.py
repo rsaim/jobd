@@ -577,3 +577,50 @@ def test_non_welcome_subjects_are_not_judged_here():
     # check only applies to a welcome, which is what can address a product.
     for subject in ("Requesting Draft Offer Letter", "Onboarding Next Steps"):
         assert welcome_names_company(subject, "Acme"), subject
+
+
+# --- a withdrawn claim is a conclusion, not a silence -----------------------
+#
+# Migration 0031 stamps the batch on each `stage_event` and has readers keep
+# the newest per application. That cannot express "a derivation ran here and
+# withdrew every stage": with no row written there is no stamp, so the case is
+# indistinguishable from "no derivation has reached this yet" and the
+# superseded per-message rows stay on the page. Live, an ex-employer's exit
+# paperwork kept showing 17 `accepted` events the current pipeline rejects,
+# alongside three more companies with phantom offers.
+#
+# `application.derived_at` (0032) records that a pass reached an application
+# whatever it concluded, which makes the two absences different facts.
+
+from jobd.services.derive_stages import should_mark_derived
+
+
+def test_a_pass_that_wrote_stages_stamps_the_application():
+    assert should_mark_derived(answered=True, wrote_rows=True) is True
+
+
+def test_a_pass_that_withdrew_every_stage_still_stamps():
+    # The point of the column: no row is written, so nothing else records
+    # that this application was judged and found to evidence no stage.
+    assert should_mark_derived(answered=True, wrote_rows=False) is True
+
+
+def test_an_unrelated_chain_is_a_conclusion():
+    # "related: false" is the model reading the chain and rejecting it, which
+    # withdraws whatever an earlier pass recorded.
+    assert should_mark_derived(answered=True, wrote_rows=False) is True
+
+
+def test_a_failed_call_that_derived_nothing_must_not_stamp():
+    # A failed call degrades to the deterministic rule and knows strictly less
+    # than the pass before it. Stamping here would let one timeout erase a
+    # real offer -- the same degrade-to-free-tier reasoning that keeps a
+    # truncated JSON response from dropping an accepted offer.
+    assert should_mark_derived(answered=False, wrote_rows=False) is False
+
+
+def test_a_failed_call_the_deterministic_rule_rescued_still_stamps():
+    # The free-tier rule found onboarding mail and wrote a stage. That is
+    # evidence in hand, and the rows it wrote must be the generation shown --
+    # which requires the stamp to point at this batch.
+    assert should_mark_derived(answered=False, wrote_rows=True) is True
