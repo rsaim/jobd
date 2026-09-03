@@ -474,3 +474,37 @@ def test_visa_paperwork_on_a_bare_chain_is_employment_evidence():
     assert onboarding_accepted_index(
         ["Candidate: ACME LLC / US-H1B USCIS COE Petition Filed"]
     ) == 0
+
+
+# --- an e-signature envelope is not by itself an offer ----------------------
+#
+# E-signature services carry real offer letters, so the sender cannot decide
+# this. What separates them is the subject: every genuine one on the live
+# corpus named the company, the offer, or the congratulations
+# ("<Company> U.S. Offer Letter", "Congratulations on Your Offer from
+# <Company>"), while a generic "Please sign this agreement" from a service
+# account carried no employment content at all and put a false offer on a
+# company that never made one.
+
+from jobd.services.derive_stages import _esign_subject_is_evidence
+
+
+def test_generic_esign_envelope_is_not_offer_evidence():
+    for subject in (
+        "Please sign this agreement",
+        "Please DocuSign: document",
+        "Signature requested",
+        "Completed: Document",
+    ):
+        assert not _esign_subject_is_evidence(subject), subject
+
+
+def test_named_offer_letters_survive():
+    for subject in (
+        "ACME U.S. Offer Letter - Candidate.pdf",
+        "Congratulations on Your Offer from ACME",
+        "Congrats and Welcome to ACME!",
+        "Your employment agreement",
+        "Offer letter for review",
+    ):
+        assert _esign_subject_is_evidence(subject), subject

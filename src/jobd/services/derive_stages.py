@@ -129,6 +129,25 @@ _TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
 _CALENDAR_RSVP = re.compile(r"(accepted|declined|tentative):\s", re.I)
 
 
+#: Senders that deliver documents on someone else's behalf. They carry real
+#: offer letters, so the sender alone decides nothing -- the subject does.
+_ESIGN_SENDERS = re.compile(r"(docusign|hellosign|adobesign|pandadoc|signnow)", re.I)
+
+#: Employment content in an e-signature subject. Every genuine offer on the
+#: live corpus named the company, the offer, or the congratulations; the one
+#: false positive was a service account's bare "Please sign this agreement".
+_ESIGN_EVIDENCE = re.compile(
+    r"\b(offer|employment|congrat|welcome|hire|onboard|start\s+date|"
+    r"compensation|salary|equity)\b",
+    re.I,
+)
+
+
+def _esign_subject_is_evidence(subject: str | None) -> bool:
+    """Whether an e-signature subject can support an offer or acceptance."""
+    return bool(_ESIGN_EVIDENCE.search(subject or ""))
+
+
 #: Offer paperwork named in a subject. An *outbound* message counts as offer
 #: evidence only when it names one of these: replying to an offer-letter
 #: request is real evidence, while "Thank You For The Opportunity" -- what a
@@ -230,6 +249,17 @@ def derive_stages(
                 out.bad_evidence_index += 1
                 continue
             proof = messages[idx - 1]
+            if (
+                item["stage"] in ("offer", "accepted")
+                and _ESIGN_SENDERS.search(proof.get("sender_address") or "")
+                and not _esign_subject_is_evidence(proof.get("subject"))
+            ):
+                # A bare e-signature envelope -- "Please sign this agreement"
+                # from a service account -- names no company, role or offer.
+                # The same sender carries real offer letters, so the subject
+                # is what separates them.
+                out.bad_evidence_index += 1
+                continue
             if (
                 item["stage"] == "offer"
                 and proof.get("direction") == "outbound"
