@@ -119,36 +119,43 @@ function SearchPulse({ initial }: { initial: ActivityCalendar }) {
 
 /** The search as a conversion machine, one strip: each stage's count with a
  *  gauge showing what fraction of the PREVIOUS stage made it here. Widths are
- *  per-step conversions, not shares of the total — 611 applications against
- *  11 offers on one linear scale would render the right half of the strip
+ *  per-step conversions, not shares of the total — 364 companies against
+ *  7 offers on one linear scale would render the right half of the strip
  *  invisible, and the question each gauge answers ("of those, how many?") is
- *  the per-step one anyway. */
+ *  the per-step one anyway.
+ *
+ *  Every stage counts COMPANIES. The search is a search for an employer, so
+ *  one company applied to four times is one company that either interviewed
+ *  you or did not; counting applications let a single employer contribute
+ *  four times to every gauge and put 13 in the offers slot where seven
+ *  companies had made an offer. Application volume rides along in the first
+ *  stage's hint rather than as a step of its own. */
 function FunnelStrip({ stats }: { stats: Stats }) {
   const stages = [
     {
-      label: "Applied",
-      n: stats.total_applications,
-      hint: "Every application on record, including unanswered recruiter pitches.",
+      label: "Companies",
+      n: stats.total_companies,
+      hint: `Every company on record, including agencies and unanswered recruiter pitches — across ${stats.total_applications} applications.`,
     },
     {
       label: "Engaged",
       n: stats.engaged,
-      hint: "A real conversation existed: you wrote to them, or the process reached a stage no single email can mint.",
+      hint: "Companies where a real conversation existed: you wrote to them, or the process reached a stage no single email can mint.",
     },
     {
       label: "Replied",
       n: stats.replied,
-      hint: "An inbound message arrived after your first outbound one — the company actually answered you.",
+      hint: "Companies where an inbound message arrived after your first outbound one — they actually answered you.",
     },
     {
       label: "Interviewed",
       n: stats.interviewed,
-      hint: "Applications with at least one confirmed interview round.",
+      hint: "Companies that ran at least one confirmed interview round.",
     },
     {
       label: "Offers",
       n: stats.offers,
-      hint: "Applications that ever had an offer extended, however they ended.",
+      hint: "Companies that ever extended an offer, however it ended.",
     },
   ]
   return (

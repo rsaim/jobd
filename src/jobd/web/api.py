@@ -147,6 +147,7 @@ def _briefing(row: dashboard.BriefingRow) -> dict[str, Any]:
 def _stats(stats: dashboard.Stats) -> dict[str, Any]:
     return {
         "total_applications": stats.total_applications,
+        "total_companies": stats.total_companies,
         "by_outcome": stats.by_outcome,
         "response_rate": stats.response_rate,
         "ghost_rate": stats.ghost_rate,

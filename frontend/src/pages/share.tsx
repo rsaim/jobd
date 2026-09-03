@@ -26,8 +26,10 @@ export function SharePage() {
   const rooms = Math.round(s.interview_hours)
   const prep = Math.round(s.prep_hours)
   const total = rooms + prep
+  // Companies at every stage, matching the Home strip — one employer applied
+  // to four times is one company that either interviewed you or did not.
   const funnel = [
-    ["applied", s.total_applications],
+    ["companies", s.total_companies],
     ["engaged", s.engaged],
     ["replied", s.replied],
     ["interviewed", s.interviewed],

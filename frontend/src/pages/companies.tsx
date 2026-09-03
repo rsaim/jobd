@@ -87,7 +87,11 @@ export function CompaniesPage() {
           <Stat value={pct(data.stats.response_rate)} label="Replied" />
           <Stat value={pct(data.stats.ghost_rate)} label="Ghosted" />
           <Stat value={data.stats.interviews} label="Interviews" />
-          <Stat value={data.stats.offers} label="Offers" />
+          <Stat
+            value={data.stats.offers}
+            label="Offers"
+            hint="Companies that ever extended an offer."
+          />
         </StatBand>
       )}
 

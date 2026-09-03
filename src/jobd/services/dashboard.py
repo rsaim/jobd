@@ -865,6 +865,11 @@ class Stats:
     """P4(a): the counting half of G5. Funnel and rates, not inference."""
 
     total_applications: int
+    #: Distinct companies on record. The funnel's first stage: the search is
+    #: a search for an employer, so every gauge after this one counts
+    #: companies too, and `total_applications` becomes a volume figure
+    #: alongside the funnel rather than a step inside it.
+    total_companies: int
     by_outcome: dict[str, int]
     response_rate: float
     ghost_rate: float
@@ -892,11 +897,14 @@ class Stats:
     #: held at least one round. Nothing records a study session; this is a
     #: round-anchored estimate of the invisible half of the work.
     prep_hours: float
-    #: Applications that ever had an offer extended, regardless of how it
-    #: ended — reading `by_outcome["offer"]` alone undercounts this, because
-    #: an application that went offer -> accepted or offer -> declined is
-    #: filed under its *later* outcome, not "offer" (see `_APPLICATION_FACTS`
+    #: Companies that ever extended an offer, regardless of how it ended —
+    #: reading `by_outcome["offer"]` alone undercounts this, because an
+    #: application that went offer -> accepted or offer -> declined is filed
+    #: under its *later* outcome, not "offer" (see `_APPLICATION_FACTS`
     #: docstring on why outcome is derived from the latest event only).
+    #: Counted per company like the rest of the funnel: four applications to
+    #: one employer that made one offer is one offer, and counting them
+    #: separately read 13 where seven companies had offered.
     offers: int
     #: `by_outcome["rejected"]`, named explicitly so a template doesn't have
     #: to know the dict key means "the company said no" — as opposed to
@@ -904,12 +912,13 @@ class Stats:
     #: candidate left before any decision). Three different endings; this is
     #: the one that is actually a rejection.
     rejections: int
-    #: The conversion funnel, stage by stage. `engaged` is applications where
-    #: a real conversation existed (you wrote to them, or the process reached
-    #: a stage no single email can mint); `replied` is the numerator of
-    #: `response_rate` (an inbound message AFTER your first outbound one);
-    #: `interviewed` is applications with at least one confirmed round —
-    #: apps, not rounds, so it chains with the other stages.
+    #: The conversion funnel, stage by stage, counted in *companies* so each
+    #: gauge answers "of those companies, how many reached the next stage".
+    #: `engaged` is companies where a real conversation existed (you wrote to
+    #: them, or the process reached a stage no single email can mint);
+    #: `replied` is the numerator of `response_rate` (an inbound message
+    #: AFTER your first outbound one); `interviewed` is companies with at
+    #: least one confirmed round — companies, not rounds, so it chains.
     engaged: int
     replied: int
     interviewed: int
@@ -1048,6 +1057,7 @@ _APPLICATION_FACTS = """
           AND {current}
     )
     SELECT a.id,
+           a.company_id,
            -- Derived claims outrank the legacy column, matching
            -- `timeline.terminal_outcome`. `a.outcome` is written by the
            -- per-message pipeline and the timeline derivation never updates
@@ -1082,8 +1092,8 @@ _APPLICATION_FACTS = """
     LEFT JOIN had_offer ho ON ho.application_id = a.id
     LEFT JOIN had_interview hi ON hi.application_id = a.id
     LEFT JOIN message m ON m.application_id = a.id
-    GROUP BY a.id, c.kind, oe.stage, le.stage, ho.application_id,
-             hi.application_id
+    GROUP BY a.id, a.company_id, c.kind, oe.stage, le.stage,
+             ho.application_id, hi.application_id
 """.replace("{current}", _CURRENT_BATCH)
 
 
@@ -1121,7 +1131,7 @@ def compute_stats(
     engaged_rows = conn.execute(
         _stage_scoped(
                 """
-                SELECT a.id FROM application a
+                SELECT a.id, a.company_id FROM application a
                 WHERE EXISTS (SELECT 1 FROM message m
                               WHERE m.company_id = a.company_id
                                 AND m.direction = 'outbound')
@@ -1134,18 +1144,31 @@ def compute_stats(
         {"beyond": list(_BEYOND_SCREEN_STAGES)},
     ).fetchall()
     engaged = {row[0] for row in engaged_rows}
+    #: The funnel counts *companies*: the search is a search for an employer,
+    #: and one company you applied to four times is one company that either
+    #: interviewed you or did not. Counting applications let a single
+    #: employer contribute four times to every stage -- one employer with
+    #: four applications on the reference record pushed the offers gauge to
+    #: 13 where seven companies had made an offer. `court_*` and the momentum series stay per-application below;
+    #: those measure work in flight, where each thread really is its own.
+    engaged_companies = {row[1] for row in engaged_rows}
 
     by_outcome: dict[str, int] = {}
     from jobd.domain.record import TERMINAL_STAGES, is_ghosted
 
     ghosted_ids: list[Any] = []
-    offers_n = 0
+    #: Companies, not applications -- see `engaged_companies`. `by_outcome`
+    #: stays per-application: it partitions the applications themselves, and
+    #: one company can genuinely hold both a rejection and an open process.
+    offer_companies: set[Any] = set()
+    all_companies: set[Any] = set()
     court_yours = court_theirs = 0
-    for _id, outcome, latest_stage, last_out, last_dir, had_offer in rows:
+    for _id, company_id, outcome, latest_stage, last_out, last_dir, had_offer in rows:
         key = str(outcome) if outcome else "open"
         by_outcome[key] = by_outcome.get(key, 0) + 1
+        all_companies.add(company_id)
         if had_offer:
-            offers_n += 1
+            offer_companies.add(company_id)
         ghosted = is_ghosted(
             last_message_at=last_out,
             last_direction=last_dir,
@@ -1175,15 +1198,19 @@ def compute_stats(
     # ignored is not a non-response, it's a non-conversation.
     mail = conn.execute(
         """
+        -- Grouped by company, not application: the funnel counts companies,
+        -- and mail is already joined on `company_id` anyway, so two
+        -- applications at one employer share every message and would
+        -- otherwise both count the same reply.
         WITH app_mail AS (
-            SELECT a.id,
+            SELECT a.company_id,
                    min(m.sent_at) FILTER (WHERE m.direction = 'outbound')
                        AS first_out,
                    max(m.sent_at) FILTER (WHERE m.direction = 'inbound')
                        AS last_in
             FROM application a
             JOIN message m ON m.company_id = a.company_id
-            GROUP BY a.id
+            GROUP BY a.company_id
         )
         SELECT count(*) FILTER (WHERE first_out IS NOT NULL),
                count(*) FILTER (WHERE first_out IS NOT NULL
@@ -1222,11 +1249,13 @@ def compute_stats(
         _PREP_HOURS[stage] * n for stage, n in by_stage
     )
 
-    # Applications with at least one confirmed round — the funnel's
-    # "interviewed" stage. Distinct apps, where `interviews_n` above counts
-    # rounds; both read the same gated subquery.
+    # Companies with at least one confirmed round — the funnel's
+    # "interviewed" stage. Distinct companies, where `interviews_n` above
+    # counts rounds; both read the same gated subquery.
     interviewed = conn.execute(
-        f"SELECT count(DISTINCT r.application_id) FROM ({_CONFIRMED_ROUNDS}) r",
+        f"""SELECT count(DISTINCT a.company_id)
+            FROM ({_CONFIRMED_ROUNDS}) r
+            JOIN application a ON a.id = r.application_id""",
         {"stages": list(_INTERVIEW_STAGES)},
     ).fetchone()
     interviewed_n = int(interviewed[0]) if interviewed else 0
@@ -1288,6 +1317,9 @@ def compute_stats(
     reply_lag = float(lag[0]) if lag and lag[0] is not None else None
 
     ghosted_engaged_n = sum(1 for app_id in ghosted_ids if app_id in engaged)
+    #: Ghost rate stays a per-application ratio -- it asks "of the live
+    #: conversations, how many went quiet", and a company with one dead
+    #: thread and one live one is genuinely half-ghosted.
 
     return Stats(
         total_applications=total_n,
@@ -1297,9 +1329,10 @@ def compute_stats(
         interviews=interviews_n,
         interview_hours=hours,
         prep_hours=prep,
-        offers=offers_n,
+        offers=len(offer_companies),
         rejections=by_outcome.get("rejected", 0),
-        engaged=len(engaged),
+        total_companies=len(all_companies),
+        engaged=len(engaged_companies),
         replied=replied_n,
         interviewed=interviewed_n,
         rounds_30d=rounds_30d,

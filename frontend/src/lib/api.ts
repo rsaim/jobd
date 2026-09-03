@@ -34,6 +34,7 @@ export interface BriefingRow {
 
 export interface Stats {
   total_applications: number
+  total_companies: number
   by_outcome: Record<string, number>
   response_rate: number
   ghost_rate: number
