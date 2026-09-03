@@ -65,25 +65,34 @@ class LiteLLMProvider:
         self.completion_tokens = 0
         self.cost_usd = 0.0
         self.calls = 0
-        self._timeout = timeout
-        # LiteLLM's `timeout=` governs its own request handling, and it is not
-        # sufficient on its own: a response that stalls *mid-body* leaves the
-        # process parked in `_ssl__SSLSocket_read` -> `poll` with no deadline
-        # to fire, and nothing upstream notices. Live-caught on a 461-item
-        # derive run -- the process sat with 5.6s of CPU across 30 minutes,
-        # its Postgres connection `idle in transaction`, waiting on a socket
-        # that was never going to answer.
+        # LiteLLM's scalar `timeout=` governs its own request handling and is
+        # not sufficient on its own: a response that stalls *mid-body* leaves
+        # the process parked in `_ssl__SSLSocket_read` -> `poll` with no
+        # deadline to fire, and nothing upstream notices. Live-caught twice on
+        # a 461-item derive run -- the process sat with ~6s of CPU across
+        # 20 minutes, its Postgres connection `idle in transaction`, waiting
+        # on a socket that was never going to answer.
         #
-        # A default socket timeout is the only ceiling that reaches that read.
-        # It is process-global by nature, so it is set to a generous multiple
-        # of the request timeout: high enough never to interrupt a call this
-        # provider would still be waiting on legitimately, low enough that a
-        # dead connection surfaces as an error the run can skip past instead
-        # of hanging on forever.
-        import socket
+        # A structured timeout is what reaches that read. `litellm.completion`
+        # accepts `openai.Timeout`, which *is* `httpx.Timeout`, so the read
+        # phase gets its own deadline: connect and write stay short, while
+        # `read` -- the gap between response bytes -- is the ceiling that
+        # actually fires on a stalled body.
+        #
+        # The earlier attempt here set `socket.setdefaulttimeout()` instead.
+        # That was wrong in a way worth recording: it only applies to sockets
+        # created *after* the call, and only when the default is still None,
+        # so a pooled connection opened by the HTTP client never inherited it
+        # and the same hang recurred.
+        self._timeout: Any = timeout
+        try:
+            import httpx
 
-        if socket.getdefaulttimeout() is None:
-            socket.setdefaulttimeout(max(timeout * 3, 180.0))
+            self._timeout = httpx.Timeout(
+                timeout, connect=min(timeout, 15.0), read=timeout
+            )
+        except Exception:  # noqa: BLE001 — httpx absent: keep the scalar
+            pass
         # Every schema this provider is asked for — EXTRACTION_SCHEMA,
         # VERIFICATION_SCHEMA — is a small, bounded JSON object, but capping
         # too tight backfires: VERIFICATION_SCHEMA's reasoning/
