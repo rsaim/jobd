@@ -260,6 +260,8 @@ def _communication(row: dashboard.CommunicationRow) -> dict[str, Any]:
         "application_id": _id(row.application_id),
         "role_title": row.role_title,
         "is_stage_evidence": row.is_stage_evidence,
+        "company_name": row.company_name,
+        "stages": list(row.stages),
         "link_role": row.link_role,
         "classification_tag": row.classification_tag,
         "body_text": row.body_text,

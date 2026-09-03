@@ -379,6 +379,16 @@ class CommunicationRow:
     application_id: UUID | None
     role_title: str | None
     is_stage_evidence: bool
+    #: What the pipeline read off this message, carried on the row so a list
+    #: can show its own conclusions instead of only the raw subject. The
+    #: company is the primary link's canonical name (`message.company_id`);
+    #: `stages` names the stages this message is evidence *for* rather than
+    #: only asserting that it is evidence of something -- a row that says
+    #: "offer" is checkable at a glance where a bare `evidence` tag is not.
+    #: Both default so the three builders that construct this row can adopt
+    #: them one at a time.
+    company_name: str | None = None
+    stages: tuple[str, ...] = ()
     #: 'employer' | 'agency' | None — which relationship this row represents
     #: *to the company page it's being viewed from*: 'agency' when the row
     #: is reached via the secondary `message_company` link (migration
@@ -515,6 +525,20 @@ def list_communications(
             ct.display_name, ci.identifier,
             m.application_id, a.role_title,
             EXISTS (SELECT 1 FROM stage_event se WHERE se.evidence_message_id = m.id),
+            c.canonical_name,
+            -- The stages this message is evidence for, not merely that it is
+            -- evidence for something. Restricted to the generation its application
+            -- is showing, like every other stage read here, so a row cannot
+            -- advertise a stage the current derivation withdrew.
+            coalesce((
+                SELECT array_agg(DISTINCT se2.stage)
+                FROM stage_event se2
+                JOIN application sa ON sa.id = se2.application_id
+                WHERE se2.evidence_message_id = m.id
+                  AND (CASE WHEN sa.derived_at IS NULL
+                            THEN se2.derived_at IS NULL
+                            ELSE se2.derived_at = sa.derived_at END)
+            ), '{{}}') AS stages,
             m.classified_by, m.body_text,
             -- Cast, because this parameter is bound even when it is NULL
             -- (the CASE references it unconditionally) and Postgres cannot
@@ -552,9 +576,11 @@ def list_communications(
             application_id=UUID(str(r[7])) if r[7] else None,
             role_title=r[8],
             is_stage_evidence=bool(r[9]),
-            classified_by=r[10],
-            body_text=r[11],
-            link_role=r[12],
+            company_name=r[10],
+            stages=tuple(r[11] or ()),
+            classified_by=r[12],
+            body_text=r[13],
+            link_role=r[14],
         )
         for r in rows
     ]
@@ -616,6 +642,20 @@ def semantic_search_communications(
             ct.display_name, ci.identifier,
             m.application_id, a.role_title,
             EXISTS (SELECT 1 FROM stage_event se WHERE se.evidence_message_id = m.id),
+            c.canonical_name,
+            -- The stages this message is evidence for, not merely that it is
+            -- evidence for something. Restricted to the generation its application
+            -- is showing, like every other stage read here, so a row cannot
+            -- advertise a stage the current derivation withdrew.
+            coalesce((
+                SELECT array_agg(DISTINCT se2.stage)
+                FROM stage_event se2
+                JOIN application sa ON sa.id = se2.application_id
+                WHERE se2.evidence_message_id = m.id
+                  AND (CASE WHEN sa.derived_at IS NULL
+                            THEN se2.derived_at IS NULL
+                            ELSE se2.derived_at = sa.derived_at END)
+            ), '{{}}') AS stages,
             m.classified_by, m.body_text,
             CASE
                 WHEN %(company_id)s::uuid IS NOT NULL
@@ -650,9 +690,11 @@ def semantic_search_communications(
             application_id=UUID(str(r[7])) if r[7] else None,
             role_title=r[8],
             is_stage_evidence=bool(r[9]),
-            classified_by=r[10],
-            body_text=r[11],
-            link_role=r[12],
+            company_name=r[10],
+            stages=tuple(r[11] or ()),
+            classified_by=r[12],
+            body_text=r[13],
+            link_role=r[14],
         )
         for r in rows
     ]
@@ -721,6 +763,20 @@ _SEMANTIC_SELECT = """
         ct.display_name, ci.identifier,
         m.application_id, a.role_title,
         EXISTS (SELECT 1 FROM stage_event se WHERE se.evidence_message_id = m.id),
+        c.canonical_name,
+        -- The stages this message is evidence for, not merely that it is
+        -- evidence for something. Restricted to the generation its application
+        -- is showing, like every other stage read here, so a row cannot
+        -- advertise a stage the current derivation withdrew.
+        coalesce((
+            SELECT array_agg(DISTINCT se2.stage)
+            FROM stage_event se2
+            JOIN application sa ON sa.id = se2.application_id
+            WHERE se2.evidence_message_id = m.id
+              AND (CASE WHEN sa.derived_at IS NULL
+                        THEN se2.derived_at IS NULL
+                        ELSE se2.derived_at = sa.derived_at END)
+        ), '{}') AS stages,
         m.classified_by, m.body_text,
         CASE
             WHEN %(company_id)s::uuid IS NOT NULL
@@ -758,15 +814,17 @@ def _hits(rows: list[Any], query_words: set[str]) -> list[SemanticHit]:
                 application_id=UUID(str(r[7])) if r[7] else None,
                 role_title=r[8],
                 is_stage_evidence=bool(r[9]),
-                classified_by=r[10],
-                body_text=r[11],
-                link_role=r[12],
+                company_name=r[10],
+                stages=tuple(r[11] or ()),
+                classified_by=r[12],
+                body_text=r[13],
+                link_role=r[14],
             ),
-            company_id=UUID(str(r[13])) if r[13] else None,
-            company_name=r[14],
-            distance=float(r[15]),
+            company_id=UUID(str(r[15])) if r[15] else None,
+            company_name=r[16],
+            distance=float(r[17]),
             shared_words=tuple(
-                sorted(query_words & (_content_words(r[4]) | _content_words(r[11])))
+                sorted(query_words & (_content_words(r[4]) | _content_words(r[13])))
             ),
         )
         for r in rows

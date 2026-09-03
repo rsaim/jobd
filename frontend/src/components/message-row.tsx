@@ -185,9 +185,13 @@ export function MessageBody({ id, dense = false }: { id: string; dense?: boolean
 export function MessageRow({
   message,
   defaultOpen = true,
+  inCompany = false,
 }: {
   message: CommunicationRow
   defaultOpen?: boolean
+  /** Set on a company's own page, where the extracted company name is the
+   *  same word on every row and printing it is noise rather than a reading. */
+  inCompany?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -249,7 +253,18 @@ export function MessageRow({
               )
             })()}
           <span className="truncate">{message.subject || "(no subject)"}</span>
-          {message.is_stage_evidence && <Tag className="text-primary">evidence</Tag>}
+          {/* What the pipeline read off this row, not merely that it read
+              something. A bare "evidence" tag says a claim was made here and
+              makes you open the message to find out which; naming the stage
+              lets the list be checked by scanning it, which is the whole
+              reason to show extractions on a list at all. Falls back to the
+              old tag when the row is evidence for a stage the current
+              derivation has since withdrawn. */}
+          {message.stages.length > 0 ? (
+            message.stages.map((stage) => <StageBadge key={stage} stage={stage} />)
+          ) : message.is_stage_evidence ? (
+            <Tag className="text-primary">evidence</Tag>
+          ) : null}
           {message.link_role === "agency" && (
             <Badge variant="outline" className="shrink-0">
               agency
@@ -257,6 +272,14 @@ export function MessageRow({
           )}
         </span>
         <span className="hidden items-center gap-3 text-xs text-muted-foreground lg:flex">
+          {/* The company this message was linked to. Absent on a company
+              page, where every row has the same answer and the column would
+              be one word repeated down the screen. */}
+          {message.company_name && !inCompany && (
+            <span className="max-w-40 truncate font-medium">
+              {words(message.company_name)}
+            </span>
+          )}
           {message.role_title && <span className="truncate">{words(message.role_title)}</span>}
           <span className="max-w-56 truncate">
             {message.contact_name || message.contact_address || ""}

@@ -144,6 +144,10 @@ export interface CommunicationRow {
   application_id: string | null
   role_title: string | null
   is_stage_evidence: boolean
+  /** What the pipeline read off this message: the company it was linked to
+   *  and the stages it is evidence for. */
+  company_name: string | null
+  stages: string[]
   link_role: string | null
   classification_tag: string
   /** The reply text with its quoted history already cut (envelope.body_text),

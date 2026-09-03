@@ -176,7 +176,12 @@ export function CompanyPage() {
       {communications.length ? (
         <Card className="panel enter overflow-hidden rounded-xl py-0">
           {communications.map((message) => (
-            <MessageRow key={message.id} message={message} defaultOpen={false} />
+            <MessageRow
+              key={message.id}
+              message={message}
+              defaultOpen={false}
+              inCompany
+            />
           ))}
         </Card>
       ) : (

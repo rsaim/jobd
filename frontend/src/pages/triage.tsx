@@ -52,7 +52,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { MessageBody } from "@/components/message-row"
-import { Tag } from "@/components/record-marks"
+import { StageBadge, Tag } from "@/components/record-marks"
 import {
   EmptyState,
   ErrorState,
@@ -241,6 +241,14 @@ function QueueTab({
                     {item.subject || "(no subject)"}
                   </span>
                 </span>
+                {/* Label and stage together: the label says what kind of
+                    message the extractor thought this was, the stage says
+                    what it claimed happened. Reviewing is checking those two
+                    against the subject, so both belong on the row being
+                    scanned rather than only in the detail panel. */}
+                {(item.extraction.stage as string | null) && (
+                  <StageBadge stage={item.extraction.stage as string} />
+                )}
                 <Tag>{(item.extraction.label as string) || "—"}</Tag>
               </button>
             ))}
