@@ -224,7 +224,17 @@ def list_companies(
         FROM company c
         LEFT JOIN message m ON m.company_id = c.id
         LEFT JOIN application a ON a.company_id = c.id
+        -- Only the newest derivation per application, mirroring
+        -- domain.record.latest_batch. Without this the join returns the union
+        -- of every generation -- 833 legacy `llm` rows alongside the derived
+        -- ones -- and a company shows an `accepted` its current timeline
+        -- dropped. Live: an ex-employer's exit paperwork put 17 false
+        -- `accepted` rows on the dashboard while its timeline showed none.
         LEFT JOIN stage_event s ON s.application_id = a.id
+            AND s.derived_at IS NOT DISTINCT FROM (
+                SELECT max(s2.derived_at) FROM stage_event s2
+                WHERE s2.application_id = s.application_id
+            )
         {where}
         GROUP BY c.id{having}
         ORDER BY {order}{window}
