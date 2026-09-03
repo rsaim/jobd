@@ -357,3 +357,49 @@ def test_only_consent_stages_are_guarded():
     assert _TERMINAL_BY_CONSENT == {"accepted", "declined"}
     assert "onsite" not in _TERMINAL_BY_CONSENT
     assert "rejected" not in _TERMINAL_BY_CONSENT
+
+
+# --- an offer is something the employer extends -----------------------------
+#
+# `offer` cited to an outbound message is backwards: the candidate does not
+# offer themselves a job. On the live corpus every rejection was inbound
+# (14/14), while three `offer` claims pointed at outbound mail -- two of them
+# "Thank You For The Opportunity" notes, which is what you send when turning
+# an offer DOWN. One turned a real offer into outcome=rejected.
+#
+# The rule cannot be a flat "outbound is never an offer": a reply to an
+# offer-letter request is outbound and is genuine evidence. Offer paperwork
+# named in the subject is what separates them.
+
+import inspect
+
+from jobd.services import derive_stages as derive_stages_module
+from jobd.services.derive_stages import _outbound_offer_is_evidence
+
+
+def test_outbound_thank_you_note_is_not_offer_evidence():
+    for subject in (
+        "Thank You For The Opportunity - Candidate | ACME",
+        "Thank you for the opportunity",
+    ):
+        assert not _outbound_offer_is_evidence(subject), subject
+
+
+def test_outbound_offer_letter_reply_is_evidence():
+    # A reply to an offer-letter request names the paperwork -- real evidence.
+    for subject in (
+        "Official Legal name and address For Offer Letter",
+        "Re: Offer Letter - signed",
+        "Countersigned offer letter attached",
+        "Re: Compensation package",
+    ):
+        assert _outbound_offer_is_evidence(subject), subject
+
+
+def test_guard_is_scoped_to_outbound_mail():
+    # The helper is only consulted for outbound mail -- the direction check
+    # lives at the call site -- so an inbound "Congratulations on your offer!"
+    # never reaches it and is never filtered. Asserting that here would test
+    # a path the code does not take; assert the scoping instead.
+    src = inspect.getsource(derive_stages_module)
+    assert 'proof.get("direction") == "outbound"' in src

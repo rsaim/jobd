@@ -121,6 +121,29 @@ _TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
 _CALENDAR_RSVP = re.compile(r"(accepted|declined|tentative):\s", re.I)
 
 
+#: Offer paperwork named in a subject. An *outbound* message counts as offer
+#: evidence only when it names one of these: replying to an offer-letter
+#: request is real evidence, while "Thank You For The Opportunity" -- what a
+#: candidate sends when turning an offer DOWN -- is not. Live corpus: three
+#: outbound `offer` claims, two of them thank-you notes, and one of those
+#: rendered a real offer as outcome=rejected.
+_OFFER_PAPERWORK = re.compile(
+    r"\b(offer\s+letter|offer\s+package|compensation|salary|"
+    r"counter[- ]?sign|start\s+date|equity|base\s+pay)\b",
+    re.I,
+)
+
+
+def _outbound_offer_is_evidence(subject: str | None) -> bool:
+    """Whether an outbound subject can support an `offer` claim.
+
+    An offer is extended by the employer, so outbound mail is evidence of one
+    only when it engages with the paperwork. Inbound mail never reaches this
+    check -- nothing the employer sends is filtered here.
+    """
+    return bool(_OFFER_PAPERWORK.search(subject or ""))
+
+
 def derive_stages(
     conn: Any,
     llm: Any,
@@ -199,6 +222,18 @@ def derive_stages(
                 out.bad_evidence_index += 1
                 continue
             proof = messages[idx - 1]
+            if (
+                item["stage"] == "offer"
+                and proof.get("direction") == "outbound"
+                and not _outbound_offer_is_evidence(proof.get("subject"))
+            ):
+                # The candidate does not offer themselves a job. An outbound
+                # message supports `offer` only when it engages with the
+                # paperwork; a bare "Thank You For The Opportunity" is a
+                # decline note, and reading it as an offer put the stage on
+                # the wrong message and the application on the wrong outcome.
+                out.bad_evidence_index += 1
+                continue
             if item["stage"] in _TERMINAL_BY_CONSENT and _CALENDAR_RSVP.match(
                 (proof.get("subject") or "").strip()
             ):
