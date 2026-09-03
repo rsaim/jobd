@@ -449,3 +449,28 @@ def test_derived_but_unfinished_application_is_open():
     # offer chain reading "rejected" on live data.
     assert terminal_outcome(["applied", "onsite"], "declined") is None
     assert terminal_outcome(["applied", "technical", "offer"], "rejected") is None
+
+
+# --- a bare "accepted" needs employment evidence ----------------------------
+#
+# The prompt tells the model that onboarding mail proves an offer was
+# accepted, and it applied that to *consumer product* onboarding: a
+# "how has your first month been" note from a brokerage app became an
+# accepted job offer, on an application with one message and no prior stage.
+#
+# Prior stages alone cannot decide it -- a real acceptance also arrived with
+# none, as visa paperwork on a chain the funnel never touched. What separates
+# them is whether the subject is employment paperwork, which the
+# deterministic rule already reads.
+
+def test_consumer_onboarding_is_not_employment_evidence():
+    assert onboarding_accepted_index(
+        ["Hello, How has your first month been - we'd love to hear"]
+    ) is None
+
+
+def test_visa_paperwork_on_a_bare_chain_is_employment_evidence():
+    # Real: an acceptance whose only message is the USCIS filing.
+    assert onboarding_accepted_index(
+        ["Candidate: ACME LLC / US-H1B USCIS COE Petition Filed"]
+    ) == 0

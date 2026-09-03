@@ -113,6 +113,14 @@ def _chain(conn: Any, application_id: UUID) -> list[dict[str, Any]]:
 #: Stages that assert the candidate consented to an outcome. Only these are
 #: vulnerable to a calendar RSVP being read as a hiring decision -- an
 #: "Invitation:" that the model reads as an interview is right to keep.
+#: The interview funnel -- stages that show a real process ran. An `accepted`
+#: with none of these before it is either employment paperwork on a chain the
+#: funnel never touched (real) or a consumer onboarding blast (not).
+_FUNNEL_STAGES = frozenset(
+    {"applied", "recruiter_screen", "phone_screen", "technical", "onsite", "offer"}
+)
+
+
 _TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
 
 #: A meeting RSVP, which Google Calendar and Outlook prefix onto the invite
@@ -244,6 +252,28 @@ def derive_stages(
                 # such row put a false offer on a recruiting agency. Only
                 # employment paperwork moves an application to accepted, and
                 # that is decided by the deterministic rule below.
+                out.bad_evidence_index += 1
+                continue
+            if (
+                item["stage"] == "accepted"
+                and not any(
+                    e["stage"] in _FUNNEL_STAGES
+                    for e in (payload or {}).get("events") or []
+                )
+                and onboarding_accepted_index([proof.get("subject") or ""]) is None
+            ):
+                # `accepted` with nothing before it, and no employment
+                # paperwork in the subject either. The prompt tells the model
+                # onboarding mail proves an offer was accepted, and it applied
+                # that to *consumer* onboarding -- a brokerage app asking "how
+                # has your first month been" became an accepted job offer.
+                #
+                # Prior stages alone cannot decide this: a real acceptance
+                # arrived with none too, as visa paperwork on a chain the
+                # funnel never touched. What separates them is whether the
+                # subject is employment paperwork, which the deterministic
+                # rule reads -- and it still runs below, so a genuine bare
+                # onboarding chain is recovered there rather than lost here.
                 out.bad_evidence_index += 1
                 continue
             events.append((item["stage"], proof["sent_at"], proof["id"]))
