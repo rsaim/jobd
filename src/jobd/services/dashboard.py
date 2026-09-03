@@ -28,6 +28,55 @@ from jobd.domain.record import TERMINAL_STAGES, Direction
 
 Turn = Literal["your_turn", "their_turn", "none"]
 
+#: Restricts a `stage_event` read to the generation an application is actually
+#: showing. Stage events are append-only: a derivation stamps its rows with a
+#: batch (`stage_event.derived_at`) and never deletes the pass before it, so
+#: several generations sit on the table at once and an unqualified read
+#: returns their union -- 833 legacy per-message rows alongside every derived
+#: one. `application.derived_at` says which generation is current: once a
+#: derivation has reached an application only its rows count, including when
+#: it withdrew every stage and left no row of its own to out-rank them; an
+#: application no derivation has reached still shows what it always showed.
+#:
+#: Written once and interpolated because nineteen reads in this module touch
+#: `stage_event` and they must agree. They did not: the company list was
+#: filtered while the funnel counters were not, so the same offer was both
+#: absent from a company's page and counted on the Today card -- 31 offers
+#: against six real ones.
+#:
+#: Requires the aliases it names to be in scope: `se` for the stage event and
+#: `a` for its application.
+_CURRENT_BATCH = """
+    (CASE WHEN a.derived_at IS NULL
+          THEN se.derived_at IS NULL
+          ELSE se.derived_at = a.derived_at END)
+"""
+
+#: The four `latest_stage` / `offered` CTEs repeated across the briefing
+#: queries, each restricted to the generation its application is showing.
+#: Named so the filter cannot drift back out of one of them.
+_LATEST_STAGE_CTE = """
+            SELECT DISTINCT ON (se.application_id)
+                   se.application_id, se.stage, se.occurred_at
+            FROM stage_event se
+            JOIN application a ON a.id = se.application_id
+            WHERE {current}
+            ORDER BY se.application_id, se.occurred_at DESC
+""".replace("{current}", _CURRENT_BATCH)
+
+
+def _stage_scoped(sql: str) -> str:
+    """Fill in the current-generation placeholders a stage query leaves open.
+
+    `{current}` is the batch predicate and `{latest_stage}` the whole
+    latest-stage CTE. Queries carry the placeholder rather than the SQL so the
+    filter is written once; forgetting it in one branch is what let the Today
+    card count 31 offers while the company pages showed six.
+    """
+    return sql.replace("{latest_stage}", _LATEST_STAGE_CTE).replace(
+        "{current}", _CURRENT_BATCH
+    )
+
 #: How a message got classified, in the three terms that matter to a reader:
 #: free (the deterministic prefilter), free (a learned rule or a thread/rule
 #: carry-forward), or paid (a model actually read it). Written once here
@@ -916,7 +965,8 @@ _CONFIRMED_ROUNDS = """
     FROM (
         SELECT se.application_id, se.stage, min(se.occurred_at) AS d
         FROM stage_event se
-        WHERE se.stage = ANY(%(stages)s)
+        JOIN application a ON a.id = se.application_id
+        WHERE se.stage = ANY(%(stages)s) AND {current}
         GROUP BY se.application_id, se.stage
     ) r
     JOIN application a ON a.id = r.application_id
@@ -927,7 +977,7 @@ _CONFIRMED_ROUNDS = """
               AND m.direction = 'outbound'
               AND m.sent_at BETWEEN r.d - interval '7 days'
                                 AND r.d + interval '14 days')
-"""
+""".replace("{current}", _CURRENT_BATCH)
 
 #: Assumed length of one round, in hours — a real-world default per stage,
 #: not derived from any recorded data (nothing captures how long a call
@@ -967,31 +1017,45 @@ _PREP_BASELINE_MONTHLY = 8.0
 #: kind, and the last-message facts `is_ghosted` reads.
 _APPLICATION_FACTS = """
     WITH outcome_event AS (
-        SELECT DISTINCT ON (application_id) application_id, stage
-        FROM stage_event
-        WHERE stage = ANY(%(outcome_stages)s)
-        ORDER BY application_id, occurred_at DESC
+        SELECT DISTINCT ON (se.application_id) se.application_id, se.stage
+        FROM stage_event se
+        JOIN application a ON a.id = se.application_id
+        WHERE se.stage = ANY(%(outcome_stages)s) AND {current}
+        ORDER BY se.application_id, se.occurred_at DESC
     ),
     latest_event AS (
-        SELECT DISTINCT ON (application_id) application_id, stage
-        FROM stage_event
-        ORDER BY application_id, occurred_at DESC
+        SELECT DISTINCT ON (se.application_id) se.application_id, se.stage
+        FROM stage_event se
+        JOIN application a ON a.id = se.application_id
+        WHERE {current}
+        ORDER BY se.application_id, se.occurred_at DESC
     ),
     -- An application that went offer -> accepted or offer -> declined files
     -- under its later outcome above (outcome_event is latest-only), so "had
     -- an offer at all" needs its own flag rather than reading `outcome`.
     had_offer AS (
-        SELECT DISTINCT application_id FROM stage_event WHERE stage = 'offer'
+        SELECT DISTINCT se.application_id FROM stage_event se
+        JOIN application a ON a.id = se.application_id
+        WHERE se.stage = 'offer' AND {current}
     ),
     -- Interview evidence, for the outcome-inferred offer path below. The
     -- self-evidencing outcome stages (accepted/declined) don't count here —
     -- they're exactly what's being validated.
     had_interview AS (
-        SELECT DISTINCT application_id FROM stage_event
-        WHERE stage IN ('recruiter_screen', 'phone_screen', 'technical', 'onsite')
+        SELECT DISTINCT se.application_id FROM stage_event se
+        JOIN application a ON a.id = se.application_id
+        WHERE se.stage IN ('recruiter_screen', 'phone_screen', 'technical', 'onsite')
+          AND {current}
     )
     SELECT a.id,
-           coalesce(a.outcome, oe.stage) AS outcome,
+           -- Derived claims outrank the legacy column, matching
+           -- `timeline.terminal_outcome`. `a.outcome` is written by the
+           -- per-message pipeline and the timeline derivation never updates
+           -- it, so on a derived application it is a stale second opinion:
+           -- 405 of 461 rows are NULL and 12 contradict their own claims.
+           -- It still speaks for an application no derivation has reached.
+           CASE WHEN a.derived_at IS NOT NULL THEN oe.stage
+                ELSE coalesce(a.outcome, oe.stage) END AS outcome,
            le.stage AS latest_stage,
            max(m.sent_at) FILTER (WHERE m.direction = 'outbound') AS last_out,
            (array_agg(m.direction ORDER BY m.sent_at DESC)
@@ -1004,7 +1068,9 @@ _APPLICATION_FACTS = """
            -- that gate, "thanks, I'll pass" on a cold pitch counted as a
            -- declined offer — live-caught inflating offers 19 vs ~10 real.
            (ho.application_id IS NOT NULL
-               OR (coalesce(a.outcome, oe.stage) IN ('accepted', 'declined')
+               OR ((CASE WHEN a.derived_at IS NOT NULL THEN oe.stage
+                         ELSE coalesce(a.outcome, oe.stage) END)
+                       IN ('accepted', 'declined')
                    AND coalesce(c.kind, 'employer') <> 'agency'
                    AND (hi.application_id IS NOT NULL
                         OR bool_or(m.direction = 'outbound')))
@@ -1018,7 +1084,7 @@ _APPLICATION_FACTS = """
     LEFT JOIN message m ON m.application_id = a.id
     GROUP BY a.id, c.kind, oe.stage, le.stage, ho.application_id,
              hi.application_id
-"""
+""".replace("{current}", _CURRENT_BATCH)
 
 
 def compute_stats(
@@ -1053,15 +1119,18 @@ def compute_stats(
     # mint. A cold pitch that was never answered didn't ghost anyone and
     # nobody owes anyone a reply on it — it was never a conversation.
     engaged_rows = conn.execute(
-        """
-        SELECT a.id FROM application a
-        WHERE EXISTS (SELECT 1 FROM message m
-                      WHERE m.company_id = a.company_id
-                        AND m.direction = 'outbound')
-           OR EXISTS (SELECT 1 FROM stage_event se
-                      WHERE se.application_id = a.id
-                        AND se.stage = ANY(%(beyond)s))
-        """,
+        _stage_scoped(
+                """
+                SELECT a.id FROM application a
+                WHERE EXISTS (SELECT 1 FROM message m
+                              WHERE m.company_id = a.company_id
+                                AND m.direction = 'outbound')
+                   OR EXISTS (SELECT 1 FROM stage_event se
+                              WHERE se.application_id = a.id
+                                AND se.stage = ANY(%(beyond)s)
+                                AND {current})
+            """
+        ),
         {"beyond": list(_BEYOND_SCREEN_STAGES)},
     ).fetchall()
     engaged = {row[0] for row in engaged_rows}
@@ -1807,33 +1876,32 @@ def going_cold(
     it already happened; this is the only view that fires before it does.
     """
     rows = conn.execute(
-        """
-        WITH last_message AS (
-            SELECT DISTINCT ON (m.application_id)
-                   m.application_id, m.direction, m.sent_at, m.subject
-            FROM message m
-            WHERE m.application_id IS NOT NULL
-            ORDER BY m.application_id, m.sent_at DESC
+        _stage_scoped(
+                """
+                WITH last_message AS (
+                    SELECT DISTINCT ON (m.application_id)
+                           m.application_id, m.direction, m.sent_at, m.subject
+                    FROM message m
+                    WHERE m.application_id IS NOT NULL
+                    ORDER BY m.application_id, m.sent_at DESC
+                ),
+                latest_stage AS ({latest_stage})
+                SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
+                       ls.stage, lm.sent_at, lm.subject,
+                       extract(day FROM now() - lm.sent_at)::int
+                FROM application a
+                JOIN company c ON c.id = a.company_id
+                JOIN last_message lm ON lm.application_id = a.id
+                LEFT JOIN latest_stage ls ON ls.application_id = a.id
+                WHERE lm.direction = 'outbound'
+                  AND a.outcome IS NULL
+                  AND (ls.stage IS NULL OR NOT (ls.stage = ANY(%(terminal)s)))
+                  AND lm.sent_at <  now() - make_interval(days => %(warn)s)
+                  AND lm.sent_at >= now() - make_interval(days => %(after)s)
+                ORDER BY lm.sent_at ASC
+                LIMIT %(limit)s
+            """
         ),
-        latest_stage AS (
-            SELECT DISTINCT ON (application_id) application_id, stage
-            FROM stage_event ORDER BY application_id, occurred_at DESC
-        )
-        SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
-               ls.stage, lm.sent_at, lm.subject,
-               extract(day FROM now() - lm.sent_at)::int
-        FROM application a
-        JOIN company c ON c.id = a.company_id
-        JOIN last_message lm ON lm.application_id = a.id
-        LEFT JOIN latest_stage ls ON ls.application_id = a.id
-        WHERE lm.direction = 'outbound'
-          AND a.outcome IS NULL
-          AND (ls.stage IS NULL OR NOT (ls.stage = ANY(%(terminal)s)))
-          AND lm.sent_at <  now() - make_interval(days => %(warn)s)
-          AND lm.sent_at >= now() - make_interval(days => %(after)s)
-        ORDER BY lm.sent_at ASC
-        LIMIT %(limit)s
-        """,
         {
             "terminal": sorted(TERMINAL_STAGES),
             "warn": max(after_days - lead_days, 0),
@@ -1861,29 +1929,28 @@ def in_flight(
 ) -> list[BriefingRow]:
     """Applications whose most recent stage event is mid-process."""
     rows = conn.execute(
-        """
-        WITH latest_stage AS (
-            SELECT DISTINCT ON (application_id) application_id, stage, occurred_at
-            FROM stage_event ORDER BY application_id, occurred_at DESC
+        _stage_scoped(
+                """
+                WITH latest_stage AS ({latest_stage}),
+                last_message AS (
+                    SELECT DISTINCT ON (m.application_id)
+                           m.application_id, m.sent_at, m.subject
+                    FROM message m
+                    WHERE m.application_id IS NOT NULL
+                    ORDER BY m.application_id, m.sent_at DESC
+                )
+                SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
+                       ls.stage, lm.sent_at, lm.subject,
+                       extract(day FROM now() - ls.occurred_at)::int
+                FROM latest_stage ls
+                JOIN application a ON a.id = ls.application_id
+                JOIN company c ON c.id = a.company_id
+                LEFT JOIN last_message lm ON lm.application_id = a.id
+                WHERE ls.stage = ANY(%(stages)s) AND a.outcome IS NULL
+                ORDER BY ls.occurred_at DESC
+                LIMIT %(limit)s
+            """
         ),
-        last_message AS (
-            SELECT DISTINCT ON (m.application_id)
-                   m.application_id, m.sent_at, m.subject
-            FROM message m
-            WHERE m.application_id IS NOT NULL
-            ORDER BY m.application_id, m.sent_at DESC
-        )
-        SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
-               ls.stage, lm.sent_at, lm.subject,
-               extract(day FROM now() - ls.occurred_at)::int
-        FROM latest_stage ls
-        JOIN application a ON a.id = ls.application_id
-        JOIN company c ON c.id = a.company_id
-        LEFT JOIN last_message lm ON lm.application_id = a.id
-        WHERE ls.stage = ANY(%(stages)s) AND a.outcome IS NULL
-        ORDER BY ls.occurred_at DESC
-        LIMIT %(limit)s
-        """,
         {"stages": list(_IN_FLIGHT_STAGES), "limit": limit},
     ).fetchall()
     return _briefing_rows(rows)
@@ -1906,20 +1973,19 @@ def in_flight_count(conn: psycopg.Connection[Any]) -> int:
     # the inbox reads as a live process (430 "moving" on the reference
     # record; ~100 actually were).
     row = conn.execute(
-        """
-        WITH latest_stage AS (
-            SELECT DISTINCT ON (application_id) application_id, stage
-            FROM stage_event ORDER BY application_id, occurred_at DESC
-        )
-        SELECT count(*)
-        FROM latest_stage ls
-        JOIN application a ON a.id = ls.application_id
-        WHERE ls.stage = ANY(%(stages)s) AND a.outcome IS NULL
-          AND (ls.stage <> 'recruiter_screen'
-               OR EXISTS (SELECT 1 FROM message m
-                          WHERE m.company_id = a.company_id
-                            AND m.direction = 'outbound'))
-        """,
+        _stage_scoped(
+                """
+                WITH latest_stage AS ({latest_stage})
+                SELECT count(*)
+                FROM latest_stage ls
+                JOIN application a ON a.id = ls.application_id
+                WHERE ls.stage = ANY(%(stages)s) AND a.outcome IS NULL
+                  AND (ls.stage <> 'recruiter_screen'
+                       OR EXISTS (SELECT 1 FROM message m
+                                  WHERE m.company_id = a.company_id
+                                    AND m.direction = 'outbound'))
+            """
+        ),
         {"stages": list(_IN_FLIGHT_STAGES)},
     ).fetchone()
     return 0 if row is None else int(row[0])
@@ -1953,32 +2019,33 @@ def offers(conn: psycopg.Connection[Any], *, limit: int = 50) -> list[BriefingRo
     not a duplicate to merge away.
     """
     rows = conn.execute(
-        """
-        WITH latest_stage AS (
-            SELECT DISTINCT ON (application_id) application_id, stage, occurred_at
-            FROM stage_event ORDER BY application_id, occurred_at DESC
+        _stage_scoped(
+                """
+                WITH latest_stage AS ({latest_stage}),
+                last_message AS (
+                    SELECT DISTINCT ON (m.application_id)
+                           m.application_id, m.sent_at, m.subject
+                    FROM message m
+                    WHERE m.application_id IS NOT NULL
+                    ORDER BY m.application_id, m.sent_at DESC
+                ),
+                offered AS (
+                    SELECT DISTINCT se.application_id FROM stage_event se
+                    JOIN application a ON a.id = se.application_id
+                    WHERE se.stage = 'offer' AND {current}
+                )
+                SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
+                       ls.stage, lm.sent_at, lm.subject,
+                       extract(day FROM now() - coalesce(ls.occurred_at, lm.sent_at, now()))::int
+                FROM offered o
+                JOIN application a ON a.id = o.application_id
+                JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
+                LEFT JOIN latest_stage ls ON ls.application_id = a.id
+                LEFT JOIN last_message lm ON lm.application_id = a.id
+                ORDER BY ls.occurred_at DESC NULLS LAST
+                LIMIT %(limit)s
+            """
         ),
-        last_message AS (
-            SELECT DISTINCT ON (m.application_id)
-                   m.application_id, m.sent_at, m.subject
-            FROM message m
-            WHERE m.application_id IS NOT NULL
-            ORDER BY m.application_id, m.sent_at DESC
-        ),
-        offered AS (
-            SELECT DISTINCT application_id FROM stage_event WHERE stage = 'offer'
-        )
-        SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
-               ls.stage, lm.sent_at, lm.subject,
-               extract(day FROM now() - coalesce(ls.occurred_at, lm.sent_at, now()))::int
-        FROM offered o
-        JOIN application a ON a.id = o.application_id
-        JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
-        LEFT JOIN latest_stage ls ON ls.application_id = a.id
-        LEFT JOIN last_message lm ON lm.application_id = a.id
-        ORDER BY ls.occurred_at DESC NULLS LAST
-        LIMIT %(limit)s
-        """,
         {"limit": limit},
     ).fetchall()
     return _briefing_rows(rows)
@@ -1998,36 +2065,36 @@ def rejections(conn: psycopg.Connection[Any], *, limit: int = 200) -> list[Brief
     else this outcome is read.
     """
     rows = conn.execute(
-        """
-        WITH outcome_event AS (
-            SELECT DISTINCT ON (application_id) application_id, stage
-            FROM stage_event
-            WHERE stage = ANY(%(outcome_stages)s)
-            ORDER BY application_id, occurred_at DESC
+        _stage_scoped(
+                """
+                WITH outcome_event AS (
+                    SELECT DISTINCT ON (se.application_id) se.application_id, se.stage
+                    FROM stage_event se
+                    JOIN application a ON a.id = se.application_id
+                    WHERE se.stage = ANY(%(outcome_stages)s) AND {current}
+                    ORDER BY se.application_id, se.occurred_at DESC
+                ),
+                latest_stage AS ({latest_stage}),
+                last_message AS (
+                    SELECT DISTINCT ON (m.application_id)
+                           m.application_id, m.sent_at, m.subject
+                    FROM message m
+                    WHERE m.application_id IS NOT NULL
+                    ORDER BY m.application_id, m.sent_at DESC
+                )
+                SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
+                       ls.stage, lm.sent_at, lm.subject,
+                       extract(day FROM now() - coalesce(ls.occurred_at, lm.sent_at, now()))::int
+                FROM application a
+                JOIN outcome_event oe ON oe.application_id = a.id
+                JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
+                LEFT JOIN latest_stage ls ON ls.application_id = a.id
+                LEFT JOIN last_message lm ON lm.application_id = a.id
+                WHERE coalesce(a.outcome, oe.stage) = 'rejected'
+                ORDER BY ls.occurred_at DESC NULLS LAST
+                LIMIT %(limit)s
+            """
         ),
-        latest_stage AS (
-            SELECT DISTINCT ON (application_id) application_id, stage, occurred_at
-            FROM stage_event ORDER BY application_id, occurred_at DESC
-        ),
-        last_message AS (
-            SELECT DISTINCT ON (m.application_id)
-                   m.application_id, m.sent_at, m.subject
-            FROM message m
-            WHERE m.application_id IS NOT NULL
-            ORDER BY m.application_id, m.sent_at DESC
-        )
-        SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
-               ls.stage, lm.sent_at, lm.subject,
-               extract(day FROM now() - coalesce(ls.occurred_at, lm.sent_at, now()))::int
-        FROM application a
-        JOIN outcome_event oe ON oe.application_id = a.id
-        JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
-        LEFT JOIN latest_stage ls ON ls.application_id = a.id
-        LEFT JOIN last_message lm ON lm.application_id = a.id
-        WHERE coalesce(a.outcome, oe.stage) = 'rejected'
-        ORDER BY ls.occurred_at DESC NULLS LAST
-        LIMIT %(limit)s
-        """,
         {"outcome_stages": list(_OUTCOME_STAGES), "limit": limit},
     ).fetchall()
     return _briefing_rows(rows)
