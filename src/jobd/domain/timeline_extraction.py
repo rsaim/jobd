@@ -141,7 +141,14 @@ hired, and you must emit "accepted". Emit it even though no message says \
 and never appear in the mailbox at all, so this administrative mail is the \
 ONLY evidence the process succeeded. A chain that ends in onboarding but \
 shows only interviews is a wrong answer.
-7. An out-of-office auto-reply and a bare meeting cancellation evidence \
+7. CALENDAR REPLIES ARE NOT HIRING EVENTS. A subject beginning "Accepted:", \
+"Declined:", "Tentative:" or "Invitation:" is a meeting RSVP -- someone \
+answering a calendar invite, often the recruiter, not the candidate \
+answering an offer. "Accepted: <name> | <name>" is two people agreeing to \
+meet. Never emit "accepted" or "declined" from one: read it as the \
+interview it schedules, or skip it. Only employment paperwork of the kind \
+in rule 6 shows an offer was accepted.
+8. An out-of-office auto-reply and a bare meeting cancellation evidence \
 nothing. Skip them. Emit only what the chain shows -- a chain that never \
 got past an acknowledgement is just "applied", and an empty list is a valid \
 answer.

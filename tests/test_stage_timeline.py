@@ -318,3 +318,42 @@ def test_unambiguous_onboarding_still_stands_alone():
         "Requesting Draft Offer Letter",
     ):
         assert onboarding_accepted_index([subject]) == 0, subject
+
+
+# --- calendar RSVPs are not hiring decisions -------------------------------
+#
+# "Accepted: <name> | <name>" is two people agreeing to meet, which the
+# calendar prefixes onto the invite subject. The model read the literal word
+# and emitted `accepted`, putting a false offer on a recruiting agency. The
+# deterministic rule already rejected it; this guards the model's path.
+
+from jobd.services.derive_stages import _CALENDAR_RSVP, _TERMINAL_BY_CONSENT
+
+
+def test_calendar_rsvp_subjects_are_detected():
+    for subject in (
+        "Accepted: Candidate | Recruiter",
+        "Declined: Phone Screen",
+        "Tentative: Onsite Loop",
+        "accepted: lowercase invite",
+    ):
+        assert _CALENDAR_RSVP.match(subject), subject
+
+
+def test_real_acceptance_subjects_are_not_rsvps():
+    # The word appears, but not as the calendar's prefix -- these must pass.
+    for subject in (
+        "Offer Accepted - please countersign",
+        "Re: Offer accepted!",
+        "Your application was declined",
+        "Welcome aboard",
+    ):
+        assert not _CALENDAR_RSVP.match(subject), subject
+
+
+def test_only_consent_stages_are_guarded():
+    # An "Invitation:" the model reads as an interview is right to keep --
+    # only stages asserting the candidate consented can be faked by an RSVP.
+    assert _TERMINAL_BY_CONSENT == {"accepted", "declined"}
+    assert "onsite" not in _TERMINAL_BY_CONSENT
+    assert "rejected" not in _TERMINAL_BY_CONSENT

@@ -17,6 +17,8 @@ to the provider than the per-message extraction it replaces.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -108,6 +110,17 @@ def _chain(conn: Any, application_id: UUID) -> list[dict[str, Any]]:
     ]
 
 
+#: Stages that assert the candidate consented to an outcome. Only these are
+#: vulnerable to a calendar RSVP being read as a hiring decision -- an
+#: "Invitation:" that the model reads as an interview is right to keep.
+_TERMINAL_BY_CONSENT = frozenset({"accepted", "declined"})
+
+#: A meeting RSVP, which Google Calendar and Outlook prefix onto the invite
+#: subject. Anchored: a subject that merely contains the word ("Offer
+#: Accepted - please countersign") is a real acceptance and must pass.
+_CALENDAR_RSVP = re.compile(r"(accepted|declined|tentative):\s", re.I)
+
+
 def derive_stages(
     conn: Any,
     llm: Any,
@@ -186,6 +199,18 @@ def derive_stages(
                 out.bad_evidence_index += 1
                 continue
             proof = messages[idx - 1]
+            if item["stage"] in _TERMINAL_BY_CONSENT and _CALENDAR_RSVP.match(
+                (proof.get("subject") or "").strip()
+            ):
+                # "Accepted: <name> | <name>" is a calendar RSVP -- two people
+                # agreeing to meet, often recruiter to recruiter -- not a
+                # candidate accepting an offer. The prompt says so, but a
+                # model that reads the literal word still emits it, and one
+                # such row put a false offer on a recruiting agency. Only
+                # employment paperwork moves an application to accepted, and
+                # that is decided by the deterministic rule below.
+                out.bad_evidence_index += 1
+                continue
             events.append((item["stage"], proof["sent_at"], proof["id"]))
 
         # Onboarding proves the offer was accepted, and saying so is keyword
