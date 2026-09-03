@@ -403,3 +403,49 @@ def test_guard_is_scoped_to_outbound_mail():
     # a path the code does not take; assert the scoping instead.
     src = inspect.getsource(derive_stages_module)
     assert 'proof.get("direction") == "outbound"' in src
+
+
+# --- outcome follows the evidence ------------------------------------------
+#
+# `application.outcome` was read straight off the legacy column, which the
+# per-message pipeline wrote and the timeline derivation never updates. A
+# real application derived cleanly through applied -> ... -> offer ->
+# accepted still displayed outcome=None, and across the live corpus 12
+# derived applications disagreed with their column (405 of 461 were NULL).
+# The claims are the source of truth; the column is the fallback.
+
+from jobd.services.timeline import terminal_outcome
+
+
+def test_derived_terminal_stage_wins_over_stale_column():
+    assert terminal_outcome(["applied", "onsite", "offer", "accepted"], None) == "accepted"
+    assert terminal_outcome(["applied", "rejected"], None) == "rejected"
+
+
+def test_column_contradicting_the_claims_loses():
+    # Live case: the column said "withdrawn" where the chain showed rejection.
+    assert terminal_outcome(["applied", "rejected"], "withdrawn") == "rejected"
+
+
+def test_column_survives_only_when_nothing_was_derived():
+    # An application no derivation reached keeps showing what it always did.
+    assert terminal_outcome([], "rejected") == "rejected"
+    # But once a chain HAS been derived, the column no longer speaks for it:
+    # see test_derived_but_unfinished_application_is_open.
+
+
+def test_open_application_has_no_outcome():
+    assert terminal_outcome(["applied", "phone_screen"], None) is None
+
+
+def test_last_terminal_wins_when_several_are_claimed():
+    # offer -> accepted -> (later) declined: the newest terminal is the state.
+    assert terminal_outcome(["offer", "accepted", "declined"], None) == "declined"
+
+
+def test_derived_but_unfinished_application_is_open():
+    # A chain the derivation read and found no ending in is open. Trusting
+    # the column here left an onsite-only chain reading "declined" and an
+    # offer chain reading "rejected" on live data.
+    assert terminal_outcome(["applied", "onsite"], "declined") is None
+    assert terminal_outcome(["applied", "technical", "offer"], "rejected") is None

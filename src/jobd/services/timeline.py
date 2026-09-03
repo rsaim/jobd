@@ -12,6 +12,7 @@ ghosted costs a re-render rather than a migration.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -255,7 +256,10 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
                 role_title=a[1],
                 started_at=a[2],
                 ended_at=a[3],
-                outcome=a[4],
+                outcome=terminal_outcome(
+                    [c.stage for c in by_application.get(UUID(str(a[0])), [])],
+                    a[4],
+                ),
                 message_count=int(a[5]),
                 last_message_at=a[6],
                 last_direction=a[7],
@@ -266,6 +270,39 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
         contacts=[(c[0], c[1]) for c in contacts],
         unlinked_messages=0 if unlinked is None else int(unlinked[0]),
     )
+
+
+#: Stages that end an application. Ordered only for readability -- the
+#: *last* one claimed wins, not the most severe, because an offer that is
+#: later declined is a declined application.
+_TERMINAL_STAGES = ("accepted", "rejected", "declined", "withdrawn")
+
+
+def terminal_outcome(stages: Sequence[str], column: str | None) -> str | None:
+    """The application's outcome, preferring what the evidence shows.
+
+    `application.outcome` is a column the per-message pipeline wrote and the
+    timeline derivation never updates, so it goes stale the moment stages are
+    re-derived: on the live corpus 405 of 461 rows were NULL, and 12 derived
+    applications disagreed with their column outright -- one reading
+    "withdrawn" where the chain plainly showed a rejection. An application
+    whose claims run applied -> onsite -> offer -> accepted was still
+    displaying no outcome at all.
+
+    So a derived terminal claim wins. The column survives only where no
+    derivation reached, which keeps an untouched application showing exactly
+    what it always did.
+    """
+    stages = list(stages)
+    for stage in reversed(stages):
+        if stage in _TERMINAL_STAGES:
+            return stage
+    # Derived, and no terminal stage in it: the application is open, and
+    # saying so is the finding. Falling back to the column here kept exactly
+    # the rows this function exists to correct -- an application whose chain
+    # ends at `onsite` reading "declined", and one ending at `offer` reading
+    # "rejected", both straight from stale legacy state.
+    return None if stages else column
 
 
 def render(timeline: CompanyTimeline, *, now: datetime | None = None) -> str:
