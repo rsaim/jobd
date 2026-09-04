@@ -4,6 +4,7 @@
  * table read for something else.
  */
 
+import { useRange } from "@/lib/range-context"
 import { XCircle } from "lucide-react"
 
 import { useRejections } from "@/lib/api"
@@ -11,7 +12,8 @@ import { BriefingGrid } from "@/components/briefing-grid"
 import { EmptyState, ErrorState, Loading, PageHead, SectionHead } from "@/components/page"
 
 export function RejectionsPage() {
-  const { data, isPending, error } = useRejections()
+  const { query } = useRange()
+  const { data, isPending, error } = useRejections(query)
   if (isPending) return <Loading />
   if (error) return <ErrorState error={error} />
 

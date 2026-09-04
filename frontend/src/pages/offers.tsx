@@ -12,6 +12,7 @@
  * (services/dashboard.py's offers() docstring).
  */
 
+import { useRange } from "@/lib/range-context"
 import { Award } from "lucide-react"
 
 import { useOffers } from "@/lib/api"
@@ -19,7 +20,8 @@ import { BriefingGrid } from "@/components/briefing-grid"
 import { EmptyState, ErrorState, Loading, PageHead } from "@/components/page"
 
 export function OffersPage() {
-  const { data, isPending, error } = useOffers()
+  const { query } = useRange()
+  const { data, isPending, error } = useOffers(query)
   if (isPending) return <Loading />
   if (error) return <ErrorState error={error} />
 

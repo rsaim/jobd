@@ -78,12 +78,16 @@ export type ActivityMetric = ActivityCalendar["metric"]
 
 /** The activity grid on its own, for the graph's metric picker — swapping
  *  series refetches this, not the whole page payload that hosts the graph. */
-export const useActivity = (metric: ActivityMetric, companyId?: string) =>
+export const useActivity = (
+  metric: ActivityMetric,
+  companyId?: string,
+  bounds: Record<string, string> = {},
+) =>
   useQuery({
-    queryKey: ["activity", metric, companyId ?? null],
+    queryKey: ["activity", metric, companyId ?? null, bounds],
     queryFn: () =>
       get<ActivityCalendar>(
-        `/activity${qs({ metric, company: companyId })}`,
+        `/activity${qs({ metric, company: companyId, ...bounds })}`,
       ),
     staleTime: 60_000,
   })
@@ -495,30 +499,36 @@ export const useLogos = () =>
     staleTime: Infinity,
   })
 
-export const useHome = () =>
-  useQuery({ queryKey: ["home"], queryFn: () => get<HomePayload>("/home") })
+/** Every windowed hook takes the range's query fragment and puts it in the
+ *  cache key, so switching windows refetches rather than serving the last
+ *  window's numbers under the new label. */
+export const useHome = (range = "") =>
+  useQuery({
+    queryKey: ["home", range],
+    queryFn: () => get<HomePayload>(`/home${range}`),
+  })
 
 /** Its own page (pages/offers.tsx), not a Home section — every offer ever
  *  received, not the recency-bounded slice `/home` shows. */
-export const useOffers = () =>
+export const useOffers = (range = "") =>
   useQuery({
-    queryKey: ["offers"],
-    queryFn: () => get<{ offers: BriefingRow[] }>("/offers"),
+    queryKey: ["offers", range],
+    queryFn: () => get<{ offers: BriefingRow[] }>(`/offers${range}`),
   })
 
 /** Its own page (pages/waiting.tsx) — the whole backlog of companies owed a
  *  reply, where `/home`'s `waiting` is the recency-bounded briefing slice. */
-export const useWaiting = () =>
+export const useWaiting = (range = "") =>
   useQuery({
-    queryKey: ["waiting"],
-    queryFn: () => get<{ waiting: BriefingRow[] }>("/waiting"),
+    queryKey: ["waiting", range],
+    queryFn: () => get<{ waiting: BriefingRow[] }>(`/waiting${range}`),
   })
 
 /** Its own page (pages/rejections.tsx), mirroring `useOffers`. */
-export const useRejections = () =>
+export const useRejections = (range = "") =>
   useQuery({
-    queryKey: ["rejections"],
-    queryFn: () => get<{ rejections: BriefingRow[] }>("/rejections"),
+    queryKey: ["rejections", range],
+    queryFn: () => get<{ rejections: BriefingRow[] }>(`/rejections${range}`),
   })
 
 export const useCompanies = (search: string) =>

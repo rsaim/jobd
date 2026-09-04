@@ -13,6 +13,8 @@ import { Link, useSearchParams } from "react-router-dom"
 import { Building2, Search, X } from "lucide-react"
 
 import { useCompanies, qs } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
+import { rangeParams } from "@/lib/range"
 import { fmtIso, pct } from "@/lib/record"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -58,7 +60,11 @@ export function CompaniesPage() {
   const active = params.get("active") ?? ""
   const substantive = params.get("substantive") ?? ""
 
-  const query = qs({ search, kind, turn, sort, active, substantive })
+  // The range rides in the same query string as the page's own filters, so
+  // the list and its "N of M" count are asked the same question.
+  const { range } = useRange()
+  const bounds = Object.fromEntries(rangeParams(range))
+  const query = qs({ search, kind, turn, sort, active, substantive, ...bounds })
   const { data, isPending, error } = useCompanies(query)
   const filtered = Boolean(search || kind || turn || active || substantive)
 

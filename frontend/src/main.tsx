@@ -27,6 +27,7 @@ import { ContactPage } from "@/pages/contact"
 import { MessagesPage } from "@/pages/messages"
 import { OffersPage } from "@/pages/offers"
 import { WaitingPage } from "@/pages/waiting"
+import { RangeProvider } from "@/lib/range-context"
 import { RejectionsPage } from "@/pages/rejections"
 import { PipelinePage } from "@/pages/pipeline"
 import { SearchPage } from "@/pages/search"
@@ -76,6 +77,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={client}>
       <BrowserRouter>
+        {/* Inside the router: the range lives in the URL, so it needs
+            useSearchParams, and every page below reads it from here. */}
+        <RangeProvider>
         <TooltipProvider delayDuration={200}>
           <Routes>
             {/* Chrome-free: the share card is meant to be screenshotted,
@@ -109,6 +113,7 @@ createRoot(document.getElementById("root")!).render(
           {/* bottom-right belongs to the chat dock now */}
           <Toaster position="bottom-center" />
         </TooltipProvider>
+        </RangeProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

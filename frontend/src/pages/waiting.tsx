@@ -11,6 +11,7 @@
  * row to answer it honestly.
  */
 
+import { useRange } from "@/lib/range-context"
 import { Reply } from "lucide-react"
 
 import { useWaiting } from "@/lib/api"
@@ -18,7 +19,8 @@ import { BriefingTable } from "@/components/briefing-table"
 import { EmptyState, ErrorState, Loading, PageHead } from "@/components/page"
 
 export function WaitingPage() {
-  const { data, isPending, error } = useWaiting()
+  const { query } = useRange()
+  const { data, isPending, error } = useWaiting(query)
   if (isPending) return <Loading />
   if (error) return <ErrorState error={error} />
 

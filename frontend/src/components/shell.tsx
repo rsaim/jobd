@@ -44,6 +44,7 @@ import {
 import { useCallback, useEffect, useState } from "react"
 
 import { useChrome } from "@/lib/api"
+import { RangePicker } from "@/components/range-picker"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -315,6 +316,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {current?.label ?? "jobd"}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {/* Left of search, because it scopes what search runs against. */}
+            <RangePicker />
             <div className="hidden sm:block">
               <CommandTrigger onClick={() => setPaletteOpen(true)} />
             </div>

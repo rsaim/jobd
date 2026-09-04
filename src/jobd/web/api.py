@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time
@@ -218,18 +219,68 @@ def _calendar(cal: dashboard.ActivityCalendar) -> dict[str, Any]:
     }
 
 
+#: The global time range, parsed off the query string on every windowed
+#: route. Grafana-style: the client sends absolute ISO instants, so a range
+#: means the same thing on every request regardless of when it is served --
+#: "last 6 months" resolved once in the browser rather than re-resolved per
+#: endpoint, which would let two panels on one screen disagree about where
+#: the window starts.
+#:
+#: Absent or unparseable means unbounded, which is the all-time view.
+def _range(
+    since: str | None, until: str | None
+) -> tuple[datetime | None, datetime | None]:
+    def parse(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        # A `+` in a query string decodes to a space, so "…T00:00+00:00"
+        # arrives as "…T00:00 00:00" whenever a caller (curl, a hand-written
+        # link) skipped percent-encoding. Browsers encode it correctly, but
+        # the failure mode if they didn't is silent: an unparseable bound
+        # falls back to all-time, so the page would quietly report on the
+        # whole record while the header claimed a window.
+        text = value.strip().replace("Z", "+00:00")
+        try:
+            stamp = datetime.fromisoformat(text)
+        except ValueError:
+            # Retry with a trailing " 00:00" read back as the "+00:00" it
+            # was before the query string decoded the plus. Only the offset
+            # is patched -- a space between date and time is valid ISO that
+            # `fromisoformat` already accepted above, so it never gets here.
+            try:
+                stamp = datetime.fromisoformat(
+                    re.sub(r" (\d{2}:\d{2})$", r"+\1", text)
+                )
+            except ValueError:
+                return None
+        return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+    return parse(since), parse(until)
+
+
 @router.get("/activity")
 def activity(
-    metric: str = "interviews", company: UUID | None = None
+    metric: str = "interviews",
+    company: UUID | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
     """The activity grid on its own, so the graph's metric picker can swap
     series without refetching the page that hosts it. `interviews` counts
     confirmed rounds; `messages` counts inbound job-linked mail per day."""
     if metric not in ("interviews", "messages"):
         raise HTTPException(status_code=422, detail="metric must be interviews or messages.")
+    start, end = _range(since, until)
     with _connect() as conn:
         return _calendar(
-            dashboard.activity_calendar(conn, company_id=company, metric=metric)
+            dashboard.activity_calendar(
+                conn,
+                company_id=company,
+                metric=metric,
+                since=start.date() if start else None,
+                until=end.date() if end else None,
+                span_record=start is None,
+            )
         )
 
 
@@ -544,7 +595,7 @@ def company_logo(company_id: UUID) -> Response:
 
 
 @router.get("/home")
-def home() -> dict[str, Any]:
+def home(since: str | None = None, until: str | None = None) -> dict[str, Any]:
     """What needs you, and nothing else.
 
     Three lists a job search actually runs on, the activity graph above
@@ -554,30 +605,51 @@ def home() -> dict[str, Any]:
     other mid-process stages, and a decision worth making deserves its own
     address, not a section on a page that's mostly about something else.
     """
+    start, end = _range(since, until)
     with _connect() as conn:
         return {
-            "calendar": _calendar(dashboard.activity_calendar(conn)),
-            "waiting": [_briefing(r) for r in dashboard.awaiting_your_reply(conn)],
+            "calendar": _calendar(
+                dashboard.activity_calendar(
+                    conn,
+                    since=start.date() if start else None,
+                    until=end.date() if end else None,
+                    span_record=start is None,
+                )
+            ),
+            "waiting": [
+                _briefing(r)
+                for r in dashboard.awaiting_your_reply(conn, since=start, until=end)
+            ],
             "cold": [_briefing(r) for r in dashboard.going_cold(conn)],
             # A count, not a capped list — Home no longer renders in-flight
             # rows at all (only a "Moving" stat), so there's nothing left to
             # cap; see in_flight_count's docstring for the bug this replaced.
             "moving_count": dashboard.in_flight_count(conn),
-            "stats": _stats(dashboard.compute_stats(conn)),
+            "stats": _stats(dashboard.compute_stats(conn, since=start, until=end)),
             "counts": dashboard.triage_counts(conn),
         }
 
 
 @router.get("/offers")
-def offers() -> dict[str, Any]:
+def offers(since: str | None = None, until: str | None = None) -> dict[str, Any]:
     """Every application that ever received an offer — its own address, not
     folded into `/home` (see that route's docstring)."""
     with _connect() as conn:
-        return {"offers": [_briefing(r) for r in dashboard.offers(conn, limit=200)]}
+        start, end = _range(since, until)
+        return {
+            "offers": [
+                _briefing(r)
+                for r in dashboard.offers(conn, limit=200, since=start, until=end)
+            ]
+        }
+
+
+
+
 
 
 @router.get("/waiting")
-def waiting() -> dict[str, Any]:
+def waiting(since: str | None = None, until: str | None = None) -> dict[str, Any]:
     """Every company whose last message came *in* — your reply is owed.
 
     Home carries the same list bounded to a briefing (25 rows, 120 days).
@@ -586,24 +658,31 @@ def waiting() -> dict[str, Any]:
     582 rows would drown the first question while a 25-row cap would answer
     the second wrongly.
     """
+    start, end = _range(since, until)
     with _connect() as conn:
         return {
             "waiting": [
                 _briefing(r)
                 for r in dashboard.awaiting_your_reply(
-                    conn, within_days=None, limit=500
+                    conn, within_days=None, limit=500, since=start, until=end
                 )
             ]
         }
 
 
 @router.get("/rejections")
-def rejections() -> dict[str, Any]:
+def rejections(
+    since: str | None = None, until: str | None = None
+) -> dict[str, Any]:
     """Every application the company said no to — its own address, same
     reasoning as `/offers`."""
+    start, end = _range(since, until)
     with _connect() as conn:
         return {
-            "rejections": [_briefing(r) for r in dashboard.rejections(conn, limit=200)]
+            "rejections": [
+                _briefing(r)
+                for r in dashboard.rejections(conn, limit=200, since=start, until=end)
+            ]
         }
 
 
@@ -615,7 +694,10 @@ def companies(
     turn: str | None = None,
     active: int | None = None,
     substantive: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> dict[str, Any]:
+    start, end = _range(since, until)
     with _connect() as conn:
         rows = dashboard.list_companies(
             conn,
@@ -625,6 +707,8 @@ def companies(
             kind=kind or None,
             turn=turn or None,
             active_within_days=active or None,
+            since=start,
+            until=end,
         )
         return {
             "companies": [_company_row(r) for r in rows],
@@ -641,8 +725,10 @@ def companies(
                 turn=turn or None,
                 substantive=substantive == "1",
                 active_within_days=active or None,
+                since=start,
+                until=end,
             ),
-            "stats": _stats(dashboard.compute_stats(conn)),
+            "stats": _stats(dashboard.compute_stats(conn, since=start, until=end)),
         }
 
 
@@ -759,6 +845,8 @@ def messages(
     show_negative: str | None = None,
     order: str = "desc",
     page: int = 1,
+    range_since: str | None = Query(default=None, alias="since"),
+    range_until: str | None = Query(default=None, alias="until"),
 ) -> dict[str, Any]:
     """Every message, not just the 2% that resolved to a company.
 
@@ -768,7 +856,10 @@ def messages(
     rejected, which is the only place a false negative can be found: an
     explicit opt-in, never the default.
     """
-    since = until = None
+    # The global range, unless `on` names a single day -- a day is a
+    # narrower ask than the window and answering with the window instead
+    # would ignore the more specific question.
+    since, until = _range(range_since, range_until)
     if on:
         try:
             day = date.fromisoformat(on)

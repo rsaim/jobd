@@ -20,6 +20,8 @@ import {
 } from "lucide-react"
 
 import { useMessages, qs } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
+import { rangeParams } from "@/lib/range"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -46,6 +48,7 @@ const ANY = "any"
 export function MessagesPage() {
   const [params, setParams] = useSearchParams()
   const page = Number(params.get("page") ?? 1)
+  const { range } = useRange()
   const query = qs({
     search: params.get("search") ?? "",
     tag: params.get("tag") ?? "",
@@ -57,6 +60,9 @@ export function MessagesPage() {
     show_negative: params.get("show_negative") ?? "",
     order: params.get("order") ?? "desc",
     page,
+    // The global range. `on` (a single day) wins server-side, since a day is
+    // the narrower ask.
+    ...Object.fromEntries(rangeParams(range)),
   })
   const { data, isPending, error } = useMessages(query)
 

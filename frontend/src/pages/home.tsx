@@ -42,6 +42,8 @@ import {
 } from "lucide-react"
 
 import { useActivity, useHome } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
+import { rangeParams } from "@/lib/range"
 import type { ActivityCalendar, ActivityMetric, BriefingRow, Stats } from "@/lib/api"
 import { pct } from "@/lib/record"
 import { Button } from "@/components/ui/button"
@@ -77,7 +79,8 @@ import {
  *  /api/activity without reloading anything else. */
 function SearchPulse({ initial }: { initial: ActivityCalendar }) {
   const [metric, setMetric] = useState<ActivityMetric>("interviews")
-  const fetched = useActivity(metric)
+  const { range } = useRange()
+  const fetched = useActivity(metric, undefined, Object.fromEntries(rangeParams(range)))
   const calendar = metric === "interviews" ? initial : fetched.data
   return (
     <div className="flex h-full flex-col justify-center gap-2.5">
@@ -217,7 +220,8 @@ const haystack = (row: BriefingRow) =>
   ].join(" ")
 
 export function HomePage() {
-  const { data, isPending, error } = useHome()
+  const { query } = useRange()
+  const { data, isPending, error } = useHome(query)
   const [params, setParams] = useSearchParams()
   const [find, setFind] = useState(() => params.get("find") ?? "")
   const box = useRef<HTMLInputElement>(null)

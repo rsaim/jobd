@@ -65,6 +65,43 @@ _LATEST_STAGE_CTE = """
 """.replace("{current}", _CURRENT_BATCH)
 
 
+#: The global time filter, as one predicate. Every list and count on the
+#: dashboard answers "in the selected range", and the range has to mean the
+#: same thing everywhere or two pages disagree about the same window.
+#:
+#: A company or application is in the window when it exchanged mail in it.
+#: Anchoring on the message rather than on a per-table date column is what
+#: makes one range work across tables that have no comparable timestamp of
+#: their own: `application` records no date, and a `stage_event`'s
+#: `occurred_at` is its evidence message's `sent_at` anyway, so mail is the
+#: clock the whole record already runs on.
+#:
+#: NULL bounds mean unbounded, so the default all-time view runs the same
+#: query as a filtered one and there is no second code path to drift.
+#:
+#: Requires `%(since)s` and `%(until)s` to be bound, and names the
+#: application alias it filters -- pass "a" or whatever the query calls it.
+def _in_window(app_alias: str = "a") -> str:
+    """SQL: true when this application exchanged mail inside the range."""
+    return f"""
+    ((%(since)s::timestamptz IS NULL AND %(until)s::timestamptz IS NULL)
+     OR EXISTS (
+        SELECT 1 FROM message wm
+        WHERE wm.application_id = {app_alias}.id
+          AND (%(since)s::timestamptz IS NULL OR wm.sent_at >= %(since)s::timestamptz)
+          AND (%(until)s::timestamptz IS NULL OR wm.sent_at <= %(until)s::timestamptz)
+     ))
+    """
+
+
+#: Bound on every query carrying the window, so a caller that forgets one
+#: fails loudly at execution instead of silently returning the all-time set.
+def _window_params(
+    since: datetime | None, until: datetime | None
+) -> dict[str, Any]:
+    return {"since": since, "until": until}
+
+
 def _stage_scoped(sql: str) -> str:
     """Fill in the current-generation placeholders a stage query leaves open.
 
@@ -73,8 +110,10 @@ def _stage_scoped(sql: str) -> str:
     filter is written once; forgetting it in one branch is what let the Today
     card count 31 offers while the company pages showed six.
     """
-    return sql.replace("{latest_stage}", _LATEST_STAGE_CTE).replace(
-        "{current}", _CURRENT_BATCH
+    return (
+        sql.replace("{latest_stage}", _LATEST_STAGE_CTE)
+        .replace("{current}", _CURRENT_BATCH)
+        .replace("{window}", _in_window("a"))
     )
 
 #: How a message got classified, in the three terms that matter to a reader:
@@ -184,6 +223,8 @@ def _company_filters(
     turn: str | None,
     substantive: bool,
     active_within_days: int | None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """WHERE and HAVING fragments shared by `list_companies` and
     `count_companies`, so "how many are hidden" is counted with exactly the
@@ -196,6 +237,21 @@ def _company_filters(
     wheres: list[str] = []
     havings: list[str] = []
     params: dict[str, Any] = {}
+
+    # The global range. A company is in it when it exchanged mail in it --
+    # the same anchor `_in_window` uses for applications, expressed against
+    # the company because that is what this query groups by. Both bounds
+    # NULL is all-time and adds no clause at all.
+    if since is not None or until is not None:
+        wheres.append(
+            "EXISTS (SELECT 1 FROM message wm WHERE wm.company_id = c.id"
+            " AND (%(since)s::timestamptz IS NULL"
+            "      OR wm.sent_at >= %(since)s::timestamptz)"
+            " AND (%(until)s::timestamptz IS NULL"
+            "      OR wm.sent_at <= %(until)s::timestamptz))"
+        )
+        params["since"] = since
+        params["until"] = until
 
     if search:
         wheres.append(
@@ -240,6 +296,8 @@ def list_companies(
     active_within_days: int | None = None,
     limit: int | None = None,
     offset: int = 0,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[CompanyRow]:
     """Every company, message/application counts, last-touch, and its current
     stage — all aggregated in one statement. Companies are never user-created
@@ -252,6 +310,8 @@ def list_companies(
         turn=turn,
         substantive=substantive,
         active_within_days=active_within_days,
+        since=since,
+        until=until,
     )
     window = ""
     if limit is not None:
@@ -323,6 +383,8 @@ def count_companies(
     turn: str | None = None,
     substantive: bool = False,
     active_within_days: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> int:
     """How many companies match, ignoring LIMIT. Wraps the same grouped query
     rather than restating the filters, so `/companies` can say "48 shown, 141
@@ -333,6 +395,8 @@ def count_companies(
         turn=turn,
         substantive=substantive,
         active_within_days=active_within_days,
+        since=since,
+        until=until,
     )
     row = conn.execute(
         f"""
@@ -1037,14 +1101,18 @@ _CONFIRMED_ROUNDS = """
         GROUP BY se.application_id, se.stage
     ) r
     JOIN application a ON a.id = r.application_id
-    WHERE r.stage <> 'recruiter_screen'
+    -- The corroboration test is an OR pair, so the window has to be
+    -- parenthesised around it rather than sitting beside the first branch,
+    -- where it would gate only the non-recruiter stages.
+    WHERE {window} AND (
+           r.stage <> 'recruiter_screen'
        OR EXISTS (
             SELECT 1 FROM message m
             WHERE m.company_id = a.company_id
               AND m.direction = 'outbound'
               AND m.sent_at BETWEEN r.d - interval '7 days'
-                                AND r.d + interval '14 days')
-""".replace("{current}", _CURRENT_BATCH)
+                                AND r.d + interval '14 days'))
+""".replace("{current}", _CURRENT_BATCH).replace("{window}", _in_window("a"))
 
 #: Assumed length of one round, in hours — a real-world default per stage,
 #: not derived from any recorded data (nothing captures how long a call
@@ -1150,13 +1218,18 @@ _APPLICATION_FACTS = """
     LEFT JOIN had_offer ho ON ho.application_id = a.id
     LEFT JOIN had_interview hi ON hi.application_id = a.id
     LEFT JOIN message m ON m.application_id = a.id
+    WHERE {window}
     GROUP BY a.id, a.company_id, c.kind, oe.stage, le.stage,
              ho.application_id, hi.application_id
-""".replace("{current}", _CURRENT_BATCH)
+""".replace("{current}", _CURRENT_BATCH).replace("{window}", _in_window("a"))
 
 
 def compute_stats(
-    conn: psycopg.Connection[Any], *, now: datetime | None = None
+    conn: psycopg.Connection[Any],
+    *,
+    now: datetime | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> Stats:
     """Funnel counts and rates, aggregated in SQL. The relationship-intelligence
     and market-signal halves of G5 are post-v1 (build guide, M7) — this ships
@@ -1176,9 +1249,12 @@ def compute_stats(
     could be counted as ghosted. It now gets the actual latest stage.
     """
     at = now or datetime.now(UTC)
+    #: The global range, bound on every query below. Both NULL is all-time,
+    #: which runs the same SQL rather than a second unfiltered path.
+    win = _window_params(since, until)
 
     rows = conn.execute(
-        _APPLICATION_FACTS, {"outcome_stages": list(_OUTCOME_STAGES)}
+        _APPLICATION_FACTS, {"outcome_stages": list(_OUTCOME_STAGES), **win}
     ).fetchall()
     total_n = len(rows)
 
@@ -1190,16 +1266,19 @@ def compute_stats(
         _stage_scoped(
                 """
                 SELECT a.id, a.company_id FROM application a
-                WHERE EXISTS (SELECT 1 FROM message m
+                -- Parenthesised: the two engagement routes are an OR pair,
+                -- and the window has to gate both of them, not just the first.
+                WHERE {window} AND (
+                       EXISTS (SELECT 1 FROM message m
                               WHERE m.company_id = a.company_id
                                 AND m.direction = 'outbound')
                    OR EXISTS (SELECT 1 FROM stage_event se
                               WHERE se.application_id = a.id
                                 AND se.stage = ANY(%(beyond)s)
-                                AND {current})
+                                AND {current}))
             """
         ),
-        {"beyond": list(_BEYOND_SCREEN_STAGES)},
+        {"beyond": list(_BEYOND_SCREEN_STAGES), **win},
     ).fetchall()
     engaged = {row[0] for row in engaged_rows}
     #: The funnel counts *companies*: the search is a search for an employer,
@@ -1268,13 +1347,22 @@ def compute_stats(
                        AS last_in
             FROM application a
             JOIN message m ON m.company_id = a.company_id
+            -- The window filters the mail itself here, not just which
+            -- applications qualify: "did they reply" is a question about
+            -- two messages, and both have to fall inside the range for the
+            -- answer to be about the range.
+            WHERE (%(since)s::timestamptz IS NULL
+                   OR m.sent_at >= %(since)s::timestamptz)
+              AND (%(until)s::timestamptz IS NULL
+                   OR m.sent_at <= %(until)s::timestamptz)
             GROUP BY a.company_id
         )
         SELECT count(*) FILTER (WHERE first_out IS NOT NULL),
                count(*) FILTER (WHERE first_out IS NOT NULL
                                   AND last_in > first_out)
         FROM app_mail
-        """
+        """,
+        win,
     ).fetchone()
     reached_out_n, replied_n = (int(mail[0]), int(mail[1])) if mail else (0, 0)
 
@@ -1283,13 +1371,13 @@ def compute_stats(
     # the 582 "interviews" this used to report.
     interviews = conn.execute(
         f"SELECT count(*) FROM ({_CONFIRMED_ROUNDS}) r",
-        {"stages": list(_INTERVIEW_STAGES)},
+        {"stages": list(_INTERVIEW_STAGES), **win},
     ).fetchone()
     interviews_n = int(interviews[0]) if interviews else 0
 
     by_stage = conn.execute(
         f"SELECT stage, count(*) FROM ({_CONFIRMED_ROUNDS}) r GROUP BY stage",
-        {"stages": list(_INTERVIEW_STAGES)},
+        {"stages": list(_INTERVIEW_STAGES), **win},
     ).fetchall()
     hours = sum(_INTERVIEW_HOURS[stage] * n for stage, n in by_stage)
 
@@ -1300,7 +1388,7 @@ def compute_stats(
         SELECT count(DISTINCT date_trunc('month', r.d))
         FROM ({_CONFIRMED_ROUNDS}) r
         """,
-        {"stages": list(_INTERVIEW_STAGES)},
+        {"stages": list(_INTERVIEW_STAGES), **win},
     ).fetchone()
     months_n = int(active_months[0]) if active_months else 0
     prep = months_n * _PREP_BASELINE_MONTHLY + sum(
@@ -1314,7 +1402,7 @@ def compute_stats(
         f"""SELECT count(DISTINCT a.company_id)
             FROM ({_CONFIRMED_ROUNDS}) r
             JOIN application a ON a.id = r.application_id""",
-        {"stages": list(_INTERVIEW_STAGES)},
+        {"stages": list(_INTERVIEW_STAGES), **win},
     ).fetchone()
     interviewed_n = int(interviewed[0]) if interviewed else 0
 
@@ -1330,6 +1418,7 @@ def compute_stats(
             "stages": list(_INTERVIEW_STAGES),
             "a30": at - timedelta(days=30),
             "a60": at - timedelta(days=60),
+            **win,
         },
     ).fetchone()
     rounds_30d, rounds_prev = (int(momentum[0]), int(momentum[1])) if momentum else (0, 0)
@@ -1357,6 +1446,10 @@ def compute_stats(
                        AS first_out
             FROM application a
             JOIN message m ON m.company_id = a.company_id
+            WHERE (%(since)s::timestamptz IS NULL
+                   OR m.sent_at >= %(since)s::timestamptz)
+              AND (%(until)s::timestamptz IS NULL
+                   OR m.sent_at <= %(until)s::timestamptz)
             GROUP BY a.id, a.company_id
         ),
         waits AS (
@@ -1366,11 +1459,14 @@ def compute_stats(
             FROM firsts f
             JOIN message m ON m.company_id = f.company_id
              AND m.direction = 'inbound' AND m.sent_at > f.first_out
+             AND (%(until)s::timestamptz IS NULL
+                  OR m.sent_at <= %(until)s::timestamptz)
             WHERE f.first_out IS NOT NULL
             GROUP BY f.id, f.first_out
         )
         SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY days) FROM waits
-        """
+        """,
+        win,
     ).fetchone()
     reply_lag = float(lag[0]) if lag and lag[0] is not None else None
 
@@ -1644,6 +1740,21 @@ def daily_activity(
     return {r[0]: int(r[1]) for r in rows}
 
 
+def _earliest_activity(
+    conn: psycopg.Connection[Any], *, company_id: UUID | None = None
+) -> date | None:
+    """The first day the record has mail for, so an unbounded calendar spans
+    what actually exists rather than the default 53-week shape."""
+    if company_id is None:
+        row = conn.execute("SELECT min(sent_at)::date FROM message").fetchone()
+    else:
+        row = conn.execute(
+            "SELECT min(sent_at)::date FROM message WHERE company_id = %s",
+            (company_id,),
+        ).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def activity_calendar(
     conn: psycopg.Connection[Any],
     *,
@@ -1651,14 +1762,37 @@ def activity_calendar(
     days: int = 371,
     today: date | None = None,
     metric: str = "interviews",
+    since: date | None = None,
+    until: date | None = None,
+    span_record: bool = False,
 ) -> ActivityCalendar:
     """`daily_activity`, laid out as the week-column grid the graph renders.
 
     371 days = 53 whole weeks, so the grid is always the same width and the
-    left edge lands on a week boundary instead of drifting by weekday.
+    left edge lands on a week boundary instead of drifting by weekday. That
+    default is what the graph shows with no range selected; it is a shape
+    choice, not a claim that the record is only a year long.
+
+    `since`/`until` override it with the global range. The grid then spans
+    exactly what was asked for -- a two-year range is two years wide, and
+    the 53-week symmetry gives way to showing the window the rest of the
+    page is reporting on, which matters more than a constant width.
     """
-    end = today or datetime.now(UTC).date()
-    start = end - timedelta(days=days - 1)
+    end = until or (today or datetime.now(UTC).date())
+    if since is not None:
+        start = since
+    elif span_record:
+        # "All time" means the record, not the default year: 371 days is a
+        # grid shape, and treating it as the extent of the record is what
+        # hid eight months of a twenty-month search behind a twelve-month
+        # graph.
+        start = _earliest_activity(conn, company_id=company_id) or (
+            end - timedelta(days=days - 1)
+        )
+    else:
+        start = end - timedelta(days=days - 1)
+    if start > end:
+        start = end
     counts = daily_activity(
         conn, company_id=company_id, since=start, until=end, metric=metric
     )
@@ -1913,6 +2047,8 @@ def awaiting_your_reply(
     within_days: int | None = 120,
     limit: int = 25,
     include_terminal: bool = False,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[BriefingRow]:
     """Companies whose last message came *in* — their ball is in your court.
 
@@ -1956,6 +2092,13 @@ def awaiting_your_reply(
         LEFT JOIN application a ON a.id = lm.application_id
         LEFT JOIN latest_stage ls ON ls.company_id = c.id
         WHERE lm.direction = 'inbound'
+          -- The global range, on the message that put the ball in your
+          -- court: a reply owed on mail outside the window is not this
+          -- window's work.
+          AND (%(since)s::timestamptz IS NULL
+               OR lm.sent_at >= %(since)s::timestamptz)
+          AND (%(until)s::timestamptz IS NULL
+               OR lm.sent_at <= %(until)s::timestamptz)
           AND (%(within)s::int IS NULL
                OR lm.sent_at >= now() - make_interval(days => %(within)s::int))
           AND (%(include_terminal)s
@@ -1968,6 +2111,7 @@ def awaiting_your_reply(
             "terminal": sorted(TERMINAL_STAGES),
             "include_terminal": include_terminal,
             "limit": limit,
+            **_window_params(since, until),
         },
     ).fetchall()
     return _briefing_rows(rows)
@@ -2102,7 +2246,13 @@ def in_flight_count(conn: psycopg.Connection[Any]) -> int:
     return 0 if row is None else int(row[0])
 
 
-def offers(conn: psycopg.Connection[Any], *, limit: int = 50) -> list[BriefingRow]:
+def offers(
+    conn: psycopg.Connection[Any],
+    *,
+    limit: int = 50,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[BriefingRow]:
     """Every application that ever received an offer — its own list rather
     than buried in `in_flight` (which also includes `offer` among five
     other mid-process stages, so a live offer needing a decision reads the
@@ -2180,16 +2330,23 @@ def offers(conn: psycopg.Connection[Any], *, limit: int = 50) -> list[BriefingRo
                 JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
                 LEFT JOIN latest_stage ls ON ls.application_id = a.id
                 LEFT JOIN last_message lm ON lm.application_id = a.id
+                WHERE {window}
                 ORDER BY ls.occurred_at DESC NULLS LAST
                 LIMIT %(limit)s
             """
         ),
-        {"limit": limit},
+        {"limit": limit, **_window_params(since, until)},
     ).fetchall()
     return _briefing_rows(rows)
 
 
-def rejections(conn: psycopg.Connection[Any], *, limit: int = 200) -> list[BriefingRow]:
+def rejections(
+    conn: psycopg.Connection[Any],
+    *,
+    limit: int = 200,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[BriefingRow]:
     """Every application the company said no to — its own page, mirroring
     `offers()`.
 
@@ -2228,12 +2385,18 @@ def rejections(conn: psycopg.Connection[Any], *, limit: int = 200) -> list[Brief
                 JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
                 LEFT JOIN latest_stage ls ON ls.application_id = a.id
                 LEFT JOIN last_message lm ON lm.application_id = a.id
-                WHERE coalesce(a.outcome, oe.stage) = 'rejected'
+                -- Derived claims outrank the legacy column, as in
+                -- `_APPLICATION_FACTS` and `timeline.terminal_outcome`: the
+                -- timeline derivation never updates `a.outcome`, so on a
+                -- derived application it is a stale second opinion.
+                WHERE {window}
+                  AND (CASE WHEN a.derived_at IS NOT NULL THEN oe.stage
+                            ELSE coalesce(a.outcome, oe.stage) END) = 'rejected'
                 ORDER BY ls.occurred_at DESC NULLS LAST
                 LIMIT %(limit)s
             """
         ),
-        {"outcome_stages": list(_OUTCOME_STAGES), "limit": limit},
+        {"outcome_stages": list(_OUTCOME_STAGES), "limit": limit, **_window_params(since, until)},
     ).fetchall()
     return _briefing_rows(rows)
 
