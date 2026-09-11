@@ -46,6 +46,25 @@ Turn = Literal["your_turn", "their_turn", "none"]
 #:
 #: Requires the aliases it names to be in scope: `se` for the stage event and
 #: `a` for its application.
+#: Stage precedence for picking which of a company's applications to show,
+#: least advanced first -- `array_position` ranks by index, so a later entry
+#: outranks an earlier one. Deliberately not `timeline.STAGE_ORDER`, which is
+#: a *chronological* render order (rejected last, because a rejection ends the
+#: chain). Here the question is "which fragment says the most about the
+#: offer", and a settled outcome beats a bare `offer` whatever its date.
+_STAGE_RANK: tuple[str, ...] = (
+    "applied",
+    "recruiter_screen",
+    "phone_screen",
+    "technical",
+    "onsite",
+    "rejected",
+    "withdrawn",
+    "offer",
+    "declined",
+    "accepted",
+)
+
 _CURRENT_BATCH = """
     (CASE WHEN a.derived_at IS NULL
           THEN se.derived_at IS NULL
@@ -1060,6 +1079,14 @@ class Stats:
     #: `court_theirs` — your mail is the latest, the wait is on them.
     court_yours: int
     court_theirs: int
+    #: Median weeks from first contact with a company to its first offer
+    #: event, over companies whose offer carries a dated `stage_event`
+    #: (stage='offer'). Median, not mean, for the same reason as
+    #: `reply_lag_days`: one nine-month process would drag an average past
+    #: anything the other offers experienced. None while no dated offer
+    #: exists. Companies whose outcome implies an offer but that never got
+    #: an offer event are excluded — there is no date to measure to.
+    weeks_to_offer: float | None
 
 
 #: Stage events that say how an application ended (or that an offer landed),
@@ -1470,6 +1497,41 @@ def compute_stats(
     ).fetchone()
     reply_lag = float(lag[0]) if lag and lag[0] is not None else None
 
+    # Median weeks to an offer: the company's first dated offer event against
+    # the first message ever exchanged with that company. Per company, like
+    # the funnel: four applications to one employer that offered once is one
+    # journey, not four.
+    offer_lag = conn.execute(
+        """
+        WITH offer_dates AS (
+            SELECT a.company_id, min(se.occurred_at) AS offer_at
+            FROM stage_event se
+            JOIN application a ON a.id = se.application_id
+            WHERE se.stage = 'offer' AND {current}
+              AND (%(since)s::timestamptz IS NULL
+                   OR se.occurred_at >= %(since)s::timestamptz)
+              AND (%(until)s::timestamptz IS NULL
+                   OR se.occurred_at <= %(until)s::timestamptz)
+            GROUP BY a.company_id
+        ),
+        journeys AS (
+            SELECT o.company_id,
+                   extract(epoch FROM o.offer_at - min(m.sent_at)) / 604800.0
+                       AS weeks
+            FROM offer_dates o
+            JOIN message m ON m.company_id = o.company_id
+             AND m.sent_at <= o.offer_at
+            GROUP BY o.company_id, o.offer_at
+        )
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY weeks)
+        FROM journeys WHERE weeks >= 0
+        """.replace("{current}", _CURRENT_BATCH),
+        win,
+    ).fetchone()
+    weeks_to_offer = (
+        float(offer_lag[0]) if offer_lag and offer_lag[0] is not None else None
+    )
+
     ghosted_engaged_n = sum(1 for app_id in ghosted_ids if app_id in engaged)
     #: Ghost rate stays a per-application ratio -- it asks "of the live
     #: conversations, how many went quiet", and a company with one dead
@@ -1496,6 +1558,7 @@ def compute_stats(
         reply_lag_days=reply_lag,
         court_yours=court_yours,
         court_theirs=court_theirs,
+        weeks_to_offer=weeks_to_offer,
     )
 
 
@@ -2303,6 +2366,61 @@ def offers(
                 -- not an offer) that actually ran a process. Without that
                 -- gate "thanks, I'll pass" on a cold recruiter mail becomes
                 -- a declined offer.
+                -- Ranking needs each fragment's most *advanced* stage, not
+                -- its latest. `latest_stage` answers "where does this stand"
+                -- and every other page wants that, but here it hides the
+                -- fragment that matters: the two applications carrying the
+                -- real job titles each end on `offer` (the offer-letter
+                -- thread ran on after the acceptance), so latest-stage ranked
+                -- them below three onboarding fragments whose last event is
+                -- `accepted` and whose titles are visa paperwork.
+                peak_stage AS (
+                    SELECT se.application_id,
+                           max(array_position(%(stage_order)s::text[], se.stage))
+                               AS rank
+                    FROM stage_event se
+                    JOIN application a ON a.id = se.application_id
+                    WHERE {current}
+                    GROUP BY se.application_id
+                ),
+                -- The status shown is the COMPANY's furthest point, not the
+                -- kept fragment's. Those differ: an accepted offer whose
+                -- offer-letter thread ran on past the acceptance leaves its
+                -- best-titled fragment ending on `offer`, and reporting that
+                -- would tell you a job you took is still awaiting a decision.
+                company_peak AS (
+                    SELECT a.company_id,
+                           (ARRAY_AGG(se.stage ORDER BY
+                               array_position(%(stage_order)s::text[], se.stage)
+                               DESC))[1] AS stage
+                    FROM stage_event se
+                    JOIN application a ON a.id = se.application_id
+                    WHERE {current}
+                      AND se.stage IN ('offer', 'accepted', 'declined')
+                      -- A resolution must be evidenced by something other
+                      -- than the offer itself. One mail cannot both convey an
+                      -- offer and record the answer to it, but the extractor
+                      -- reads a subject like "Requesting Draft Offer Letter"
+                      -- as both -- which marked a company accepted on the
+                      -- strength of the offer mail alone. Requiring separate
+                      -- evidence keeps a real acceptance (its own later mail,
+                      -- or a hand-recorded conversation) and drops the echo.
+                      AND (
+                          se.stage = 'offer'
+                          OR se.evidence_message_id IS NULL
+                          OR NOT EXISTS (
+                              SELECT 1 FROM stage_event so
+                              JOIN application sa ON sa.id = so.application_id
+                              WHERE so.stage = 'offer'
+                                AND so.evidence_message_id
+                                    = se.evidence_message_id
+                                AND (CASE WHEN sa.derived_at IS NULL
+                                          THEN so.derived_at IS NULL
+                                          ELSE so.derived_at = sa.derived_at END)
+                          )
+                      )
+                    GROUP BY a.company_id
+                ),
                 offered AS (
                     SELECT DISTINCT se.application_id FROM stage_event se
                     JOIN application a ON a.id = se.application_id
@@ -2322,20 +2440,58 @@ def offers(
                                       ELSE si.derived_at = sa.derived_at END)
                       )
                 )
-                SELECT c.id, c.canonical_name, c.kind, a.id, a.role_title,
-                       ls.stage, lm.sent_at, lm.subject,
+                -- One row per company, not per application. The question
+                -- this page answers is "who made me an offer", and a company
+                -- is one answer however many application rows its process
+                -- got split into. That splitting is real and common: a long
+                -- process arrives as consecutive `application` rows carved
+                -- out of one mail chain (nine rows tiling end-to-end for a
+                -- single hire on the reference record, two of them sharing
+                -- one thread_id), and visa paperwork after the acceptance
+                -- lands as its own row again. Each fragment carries the
+                -- offer, so a per-application list showed the same offer
+                -- three times under three different role titles.
+                --
+                -- The keeper is the most *advanced* fragment, not the most
+                -- recent: `accepted` outranks a bare `offer`, so the row
+                -- shown says what actually became of the offer.
+                --
+                -- Ties break to the EARLIEST fragment, which is the opposite
+                -- of what recency would pick and is the point. What follows
+                -- an acceptance is not more hiring, it is paperwork: the
+                -- reference record's four `accepted` fragments for one hire
+                -- run [real job title, visa COE, visa, untitled], so newest
+                -- wins titled the offer after an immigration form. A
+                -- non-empty title is preferred over a null one first, since
+                -- the last fragment of a chain often carries none.
+                --
+                -- Companies stay per-row here exactly as the funnel counts
+                -- them (see `offer_companies`), so the two cannot disagree
+                -- about how many offers a search produced.
+                SELECT DISTINCT ON (c.id)
+                       c.id, c.canonical_name, c.kind, a.id, a.role_title,
+                       coalesce(cp.stage, ls.stage), lm.sent_at, lm.subject,
                        extract(day FROM now() - coalesce(ls.occurred_at, lm.sent_at, now()))::int
                 FROM offered o
                 JOIN application a ON a.id = o.application_id
                 JOIN company c ON c.id = a.company_id AND c.kind != 'agency'
                 LEFT JOIN latest_stage ls ON ls.application_id = a.id
                 LEFT JOIN last_message lm ON lm.application_id = a.id
+                LEFT JOIN peak_stage ps ON ps.application_id = a.id
+                LEFT JOIN company_peak cp ON cp.company_id = c.id
                 WHERE {window}
-                ORDER BY ls.occurred_at DESC NULLS LAST
+                ORDER BY c.id,
+                         ps.rank DESC NULLS LAST,
+                         (a.role_title IS NOT NULL) DESC,
+                         ls.occurred_at ASC NULLS LAST
                 LIMIT %(limit)s
             """
         ),
-        {"limit": limit, **_window_params(since, until)},
+        {
+            "limit": limit,
+            "stage_order": list(_STAGE_RANK),
+            **_window_params(since, until),
+        },
     ).fetchall()
     return _briefing_rows(rows)
 
