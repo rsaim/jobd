@@ -151,8 +151,8 @@ def welcome_names_company(subject: str | None, company: str) -> bool:
         return True
     lowered = text.lower()
     # Any significant word of the company name appearing is enough -- "Welcome
-    # to Initech" must satisfy "Initech Global", and "Welcome to Acme" must satisfy
-    # "Acme Corp Inc".
+    # to Initech" must satisfy "Initech Global", and "Welcome to Acme" must
+    # satisfy "Acme Corp Inc".
     return any(
         word in lowered
         for word in (w.lower() for w in company.split())
