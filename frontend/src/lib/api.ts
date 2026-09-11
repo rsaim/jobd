@@ -162,9 +162,11 @@ export interface CommunicationRow {
 export interface Claim {
   stage: string
   occurred_at: string
-  evidence_message_id: string
+  /** Null for a hand-recorded claim: a verbal offer has a witness, not a
+   *  message. See services/conversations.py. */
+  evidence_message_id: string | null
   evidence_subject: string | null
-  evidence_direction: Direction
+  evidence_direction: Direction | null
   confidence: number | null
   extracted_by: string
 }
@@ -619,6 +621,58 @@ export function useCreatePrompt() {
     mutationFn: (body: { label: string; text: string }) =>
       postJson<{ ok: boolean; message?: string; prompt?: PromptSnippet }>("/prompts", body),
     onSuccess: () => void client.invalidateQueries({ queryKey: ["prompts"] }),
+  })
+}
+
+export interface ConversationRow {
+  id: string
+  company_id: string
+  company_name: string
+  application_id: string | null
+  occurred_at: string
+  kind: string
+  counterpart: string | null
+  notes: string
+  stage: string | null
+}
+
+/** Offline conversations — the calls that leave no mail. Its own page
+ *  (pages/conversations.tsx); the only place a stage enters the record
+ *  without a model having proposed it. */
+export const useConversations = (range = "") =>
+  useQuery({
+    queryKey: ["conversations", range],
+    queryFn: () =>
+      get<{ conversations: ConversationRow[]; kinds: string[]; stages: string[] }>(
+        `/conversations${range}`,
+      ),
+  })
+
+export interface NewConversation {
+  company_id: string
+  occurred_at: string
+  kind: string
+  counterpart?: string | null
+  notes?: string
+  stage?: string | null
+}
+
+export function useAddConversation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (body: NewConversation) =>
+      postJson<{ ok: boolean; message?: string; id?: string }>("/conversations", body),
+    // A recorded stage moves the funnel, the timeline and the offers list, so
+    // settle for nothing less than a full refetch of the derived views.
+    onSuccess: () => void client.invalidateQueries(),
+  })
+}
+
+export function useDeleteConversation() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => del(`/conversations/${id}`),
+    onSuccess: () => void client.invalidateQueries(),
   })
 }
 

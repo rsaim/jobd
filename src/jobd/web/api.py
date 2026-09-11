@@ -56,6 +56,7 @@ from jobd.ports.chat import (
     Turn,
 )
 from jobd.services import chat as chat_service
+from jobd.services import conversations as conversations_service
 from jobd.services import dashboard, learning, logos, outbound, summaries, timeline
 
 router = APIRouter(prefix="/api")
@@ -1361,6 +1362,92 @@ def teach(body: TeachBody) -> dict[str, Any]:
         f"Learned {result.match_type}={result.value} → {result.verdict}."
         f" Resolved {result.resolved} backlog message(s)."
     )
+
+
+class ConversationBody(BaseModel):
+    """An offline conversation, as typed by the person who had it."""
+
+    company_id: UUID
+    occurred_at: str
+    kind: str = "phone"
+    counterpart: str | None = None
+    notes: str = ""
+    stage: str | None = None
+
+
+@router.get("/conversations")
+def conversations(
+    company_id: UUID | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """Recorded offline conversations, most recent first."""
+    range_since, range_until = _range(since, until)
+    with _connect() as conn:
+        rows = conversations_service.listing(
+            conn, company_id=company_id, since=range_since, until=range_until
+        )
+    return {
+        "conversations": [
+            {
+                "id": str(r.id),
+                "company_id": str(r.company_id),
+                "company_name": r.company_name,
+                "application_id": str(r.application_id) if r.application_id else None,
+                "occurred_at": r.occurred_at.isoformat(),
+                "kind": r.kind,
+                "counterpart": r.counterpart,
+                "notes": r.notes,
+                "stage": r.stage,
+            }
+            for r in rows
+        ],
+        "kinds": list(conversations_service.KINDS),
+        "stages": list(conversations_service.STAGES),
+    }
+
+
+@router.post("/conversations")
+def add_conversation(body: ConversationBody) -> dict[str, Any]:
+    """Record one conversation, and the stage it establishes if it has one.
+
+    The stage is written as a real `stage_event` (`extracted_by='manual'`), so
+    a verbal offer reaches the funnel and the timeline by the same road a
+    derived one does — see `services.conversations` for why it must carry the
+    application's batch stamp to be visible at all.
+    """
+    occurred, _ = _range(body.occurred_at, None)
+    if occurred is None:
+        return _err("Could not read that date.")
+    try:
+        with _connect() as conn:
+            new_id = conversations_service.record(
+                conn,
+                company_id=body.company_id,
+                occurred_at=occurred,
+                kind=body.kind,
+                notes=body.notes,
+                counterpart=body.counterpart or None,
+                stage=body.stage or None,
+            )
+    except ValueError as error:
+        return _err(str(error))
+    except psycopg.errors.UniqueViolation:
+        # `stage_event_manual_key` (migration 0033). Re-submitting the same
+        # call is the common way to hit this — a double-click, or a second go
+        # after a slow save — so say what happened rather than 500.
+        return _err("That stage is already recorded for this company on that date.")
+    note = f" Recorded {body.stage}." if body.stage else ""
+    return {"ok": True, "message": f"Conversation saved.{note}", "id": str(new_id)}
+
+
+@router.delete("/conversations/{conversation_id}")
+def remove_conversation(conversation_id: UUID) -> dict[str, Any]:
+    """Delete a conversation, and the stage it asserted."""
+    with _connect() as conn:
+        if not conversations_service.delete(conn, conversation_id):
+            return _err("No such conversation.")
+    return _ok("Conversation removed.")
 
 
 class ResolveBody(BaseModel):

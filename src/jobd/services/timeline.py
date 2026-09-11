@@ -1,9 +1,14 @@
 """Reconstructing a company's history (M5 gate 1, PRD G2).
 
 G2's promise is not "a list of events" — it is *"each claim linked to its
-evidence message"*. So every line this produces carries the id of the message
-that evidences it, and there is no code path that emits a claim without one:
-`stage_event.evidence_message_id` is NOT NULL, and the join is inner.
+evidence"*. Every machine-extracted line here carries the id of the message
+that evidences it, and no derivation can emit one without: `llm` and
+`timeline` rows still require `evidence_message_id` (migration 0033's CHECK).
+
+The exception is a human's own entry. A verbal offer has a witness rather
+than a message, so `extracted_by='manual'` rows may carry no message id and
+the join must be outer -- an inner join silently drops exactly the events the
+mailbox could never have shown, which is the only reason they were typed in.
 
 Ghosting appears here and is stored nowhere, which is the M3 decision paying
 off — the threshold is an argument, so changing your mind about what counts as
@@ -50,13 +55,16 @@ STAGE_ORDER: tuple[str, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class Claim:
-    """One stage transition, and the message that proves it."""
+    """One stage transition, and the evidence that proves it."""
 
     stage: Stage
     occurred_at: datetime
-    evidence_message_id: UUID
+    #: None only for a human's own entry — see the module docstring.
+    evidence_message_id: UUID | None
     evidence_subject: str | None
-    evidence_direction: Direction
+    #: Both None for a hand-recorded claim: they are the message's fields,
+    #: and a conversation has no message.
+    evidence_direction: Direction | None
     confidence: float | None
     extracted_by: str
     #: The derivation batch this claim came from; None for rows written
@@ -174,8 +182,9 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
         "       m.subject, m.direction, s.confidence, s.extracted_by,"
         "       s.derived_at"
         " FROM stage_event s"
-        # Inner join: structurally, no claim can be emitted without evidence.
-        " JOIN message m ON m.id = s.evidence_message_id"
+        # Outer: a manual claim's evidence is the conversation record, not a
+        # message. Inner would drop precisely the off-mail events.
+        " LEFT JOIN message m ON m.id = s.evidence_message_id"
         " JOIN application a ON a.id = s.application_id"
         " WHERE a.company_id = %s"
         # An application a derivation has reached shows that derivation and
@@ -209,7 +218,9 @@ def build(conn: psycopg.Connection[Any], company_id: UUID) -> CompanyTimeline:
             Claim(
                 stage=claim[1],
                 occurred_at=claim[2],
-                evidence_message_id=UUID(str(claim[3])),
+                evidence_message_id=(
+                    None if claim[3] is None else UUID(str(claim[3]))
+                ),
                 evidence_subject=claim[4],
                 evidence_direction=claim[5],
                 confidence=None if claim[6] is None else float(claim[6]),
@@ -337,8 +348,8 @@ def render(timeline: CompanyTimeline, *, now: datetime | None = None) -> str:
             confidence = f" {claim.confidence:.2f}" if claim.confidence else ""
             lines.append(
                 f"      {claim.occurred_at:%Y-%m-%d}  {claim.stage:<16}"
-                f"  ← {claim.evidence_subject or '(no subject)'}"
-                f"  [{claim.evidence_message_id}{confidence}]"
+                f"  ← {claim.evidence_subject or '(recorded by hand)'}"
+                f"  [{claim.evidence_message_id or 'conversation'}{confidence}]"
             )
         if not application.claims:
             lines.append("      (no evidence-linked stage events)")

@@ -32,6 +32,7 @@ import {
   ListChecks,
   Mail,
   MoonStar,
+  Phone,
   Radar,
   ScrollText,
   Send,
@@ -83,6 +84,14 @@ const NAV = [
         label: "Review",
         icon: Reply,
         match: (p: string) => p.startsWith("/waiting"),
+      },
+      // The one page that writes to the record rather than reading it:
+      // calls and meetings the mailbox cannot show.
+      {
+        to: "/conversations",
+        label: "Conversations",
+        icon: Phone,
+        match: (p: string) => p.startsWith("/conversations"),
       },
       {
         to: "/companies",
