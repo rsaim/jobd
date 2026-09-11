@@ -1,17 +1,87 @@
 # Task runner for jobd-ai. `just --list` shows everything.
 #
-# The server recipe is the canonical way to start the dashboard; it replaces
-# the ad-hoc shell one-liner that used to live only in session notes. The
-# OpenRouter key is read from ~/.openrouter_api_key at start (whitespace
-# stripped, never echoed); model and pricing knobs are env-overridable.
+# `just up` is the canonical way to start the dashboard: it builds and runs the
+# compose stack (app + Postgres), which is what the app actually ships as. The
+# bare-metal `serve-local` recipe below is the no-Docker path AGENTS.md
+# documents, and needs a DATABASE_URL and ~/.openrouter_api_key of its own.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 default:
     @just --list
 
-# Start the dashboard server. Frontend must be built first (see `just frontend`).
-serve port="8100":
+# --- Docker: the normal way to run this thing -------------------------------
+#
+# The image installs jobd into site-packages at BUILD time, so a plain
+# `docker compose restart` keeps serving the code baked into the last image.
+# Every recipe here that starts the app therefore passes --build: the cost of
+# a no-op rebuild is seconds, the cost of forgetting is debugging a fix that
+# was never deployed. OPENROUTER_API_KEY comes from .env via compose.
+
+# Build and start the stack, then wait until the API actually answers.
+up port="8100":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # npx in frontend/ rewrites this lockfile (emnapi drift) and then `npm ci`
+    # fails the image build with EUSAGE. Restore it rather than fail at layer 3.
+    if ! git diff --quiet -- frontend/package-lock.json 2>/dev/null; then
+        echo "restoring frontend/package-lock.json (local npx rewrote it)"
+        git checkout -- frontend/package-lock.json
+    fi
+    docker compose up -d --build app
+    for _ in $(seq 1 60); do
+        if curl -fsS "http://localhost:{{ port }}/api/home" >/dev/null 2>&1; then
+            echo "jobd is up: http://localhost:{{ port }}"
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "error: no answer on :{{ port }} after 60s — try: just logs" >&2
+    exit 1
+
+# Stop the stack, leaving the database volume intact.
+down:
+    docker compose down
+
+# Rebuild and restart the app after a code change. Alias for `up`, which
+# always rebuilds — named separately because "restart" is what you reach for.
+restart port="8100": (up port)
+
+# Follow the app container's logs.
+logs *args:
+    docker compose logs -f {{ args }}
+
+# Apply pending database migrations inside the container.
+migrate *args:
+    docker compose exec app jobd migrate {{ args }}
+
+# Run any jobd subcommand in the container: `just jobd derive-stages --help`.
+jobd *args:
+    docker compose exec app jobd {{ args }}
+
+# A psql shell on the app's database.
+psql:
+    docker compose exec db psql -U jobd -d jobd
+
+# Seed the synthetic mailbox — no credentials, no network.
+demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose exec app jobd migrate up
+    docker compose exec app jobd demo
+
+# Run the test suite against the containerised database.
+test *args:
+    DATABASE_URL="$(just db-url)" .venv/bin/python -m pytest -q {{ args }}
+
+# Print the host-side connection string, for scripts run outside the container.
+# Postgres is published, so this reaches the same store the app calls db:5432.
+db-url:
+    @echo "postgresql://jobd:jobd@localhost:5432/jobd"
+
+# Start the dashboard WITHOUT Docker. Needs a reachable Postgres in
+# DATABASE_URL and a built frontend (`just frontend`). Prefer `just up`.
+serve-local port="8100":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ ! -f ~/.openrouter_api_key ]; then
