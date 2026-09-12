@@ -2,33 +2,37 @@
 
 Instructions for AI coding agents (Claude Code, Codex, Cursor, or any LLM
 with a shell) and equally for humans. Everything here is executable as
-written; nothing needs credentials until the section that says so.
+written; the demo needs one API key, real mail needs the Gmail section.
 
 ## What this is
 
 jobd is a local-first job-search CRM built from your own mailbox. It
 ingests mail (Gmail API, or a synthetic demo mailbox), classifies every
 message with a free deterministic tier first (sender rules → metadata
-prefilter → thread carry → regex extractor), sends only the residue to an
-LLM (optional, via OpenRouter/LiteLLM), and compiles the LLM's judgments
+prefilter → thread carry), sends only the residue to an
+LLM (via OpenRouter/LiteLLM, or local Ollama), and compiles the LLM's judgments
 back into transparent, human-editable sender rules so tomorrow's run pays
 less than today's. A FastAPI server renders the record: companies,
 applications, stages, offers, rejections, a review queue, and live run
 metrics.
 
-## Fastest path to a working system (no credentials)
+## Fastest path to a working system (one API key)
 
-Requires Docker with the compose plugin. From the repo root:
+Requires Docker with the compose plugin and an `OPENROUTER_API_KEY` in
+`.env` (the demo's ~100 flash calls cost cents). From the repo root:
 
 ```bash
 docker compose up -d --build      # postgres + app image
 docker compose exec app jobd migrate up
-docker compose exec app jobd demo # seed + classify a synthetic mailbox
+# JOBD_RUN_BUDGET is the hard dollar ceiling classify refuses to run without
+docker compose exec -e JOBD_RUN_BUDGET=1 app jobd demo
 # open http://localhost:8100
 ```
 
 `jobd demo` ingests 109 synthetic messages through the real ingest path and
-classifies them with the free rule-based extractor. The employers are the
+classifies them with the configured model (`JOBD_MODEL` or the default —
+needs its API key, plus a `JOBD_RUN_BUDGET`; the old keyless rule-based
+tier was removed when classification rules went dynamic). The employers are the
 Forbes AI 50 (2026) — all fifty appear, from full interview arcs (an
 accepted offer at Anthropic, a declined one at OpenAI, a live onsite loop,
 ghostings, agency pitches) down to the acknowledgement-only applies most of
@@ -182,7 +186,7 @@ about today's default:
 Read it honestly: the synthetic set is clean by construction, so binary
 scores are a floor check, not a hard benchmark — the interesting rows are
 resolution (what the free tier punts to a human) and the stage/company
-split, where the regex tier actually beats the LLM on stage vocabulary
+split, where the free tier actually beats the LLM on stage vocabulary
 while losing on company naming. When the demo dataset changes, update
 `evals/gold_demo.py` — an assertion fails loudly if the counts drift.
 
