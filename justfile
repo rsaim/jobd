@@ -180,7 +180,7 @@ daily:
     set -euo pipefail
     export OPENROUTER_API_KEY="$(tr -d '[:space:]' < ~/.openrouter_api_key)"
     export JOBD_JUDGE_MODEL="${JOBD_JUDGE_MODEL:-openrouter/google/gemini-3.7-flash}"
-    export JOBD_DISTILL_MODEL="${JOBD_DISTILL_MODEL:-openrouter/z-ai/glm-5.2}"
+    export JOBD_DISTILL_MODEL="${JOBD_DISTILL_MODEL:-openrouter/google/gemini-3.7-flash}"
     export JOBD_BUCKET="${JOBD_BUCKET:-}"
     .venv/bin/jobd scrape --window 3
     .venv/bin/jobd review sweep
@@ -196,7 +196,7 @@ distill *args:
     #!/usr/bin/env bash
     set -euo pipefail
     export OPENROUTER_API_KEY="$(tr -d '[:space:]' < ~/.openrouter_api_key)"
-    export JOBD_DISTILL_MODEL="${JOBD_DISTILL_MODEL:-openrouter/z-ai/glm-5.2}"
+    export JOBD_DISTILL_MODEL="${JOBD_DISTILL_MODEL:-openrouter/google/gemini-3.7-flash}"
     .venv/bin/jobd distill {{ args }}
 
 # Run the five-model panel discussion (writes to discussion_message).

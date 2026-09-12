@@ -46,7 +46,7 @@ services:
       # is chosen for cost, while these are a handful of interactive calls
       # that want a stronger head. Whatever is set here is offered in the
       # picker alongside _CHAT_MODEL_CHOICES.
-      JOBD_CHAT_MODEL: ${JOBD_CHAT_MODEL:-openrouter/z-ai/glm-5.2}
+      JOBD_CHAT_MODEL: ${JOBD_CHAT_MODEL:-openrouter/google/gemini-3.7-flash}
       # Per-token price for the extractor, $/Mtok. LiteLLM's price table
       # predates some gateway models, so without these the dashboard cost and
       # the CreditGuard run budget both read $0 — and the budget is only a

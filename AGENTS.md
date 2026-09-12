@@ -103,7 +103,8 @@ docker compose up -d app
 ```
 
 `.env` is gitignored. The dashboard's summary card and chat dock additionally
-need `JOBD_CHAT_MODEL` (compose defaults it to `openrouter/z-ai/glm-5.2`);
+need `JOBD_CHAT_MODEL` (compose defaults it to
+`openrouter/google/gemini-3.7-flash`);
 without it both features return 404 and the UI reads "Summary isn't
 configured".
 

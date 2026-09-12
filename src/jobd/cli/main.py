@@ -1818,12 +1818,12 @@ def audit(
 @click.option(
     "--model",
     envvar="JOBD_DISTILL_MODEL",
-    default="openrouter/z-ai/glm-5.2",
+    default="openrouter/google/gemini-3.7-flash",
     show_default=True,
     help="Reasoning-capable LiteLLM id that judges the rule candidates. "
     "Deliberately a bigger head than the extraction tier: rule-making is "
     "one cheap batch call whose mistakes compound across every future "
-    "message, so it gets the strongest judgment available.",
+    "message, so it gets a stronger head than the per-message extractor.",
 )
 @click.option(
     "--apply/--dry-run",
