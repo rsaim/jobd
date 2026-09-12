@@ -256,6 +256,23 @@ class LiteLLMProvider:
                 parsed = json.loads(content[start : end + 1])
             else:
                 raise
+        # Valid JSON is not yet a valid reading: strict json_schema asks for
+        # an object, and some models still hand back a one-element array
+        # around it (observed live: the gpt-oss default on the demo corpus,
+        # which then poisoned a thread cache and took the whole batch down).
+        # Unwrap exactly that shape; anything else non-dict fails THIS call,
+        # so the apply phase scores one message instead of losing the run.
+        if (
+            isinstance(parsed, list)
+            and len(parsed) == 1
+            and isinstance(parsed[0], dict)
+        ):
+            parsed = parsed[0]
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"{self._model} returned {type(parsed).__name__}, not the "
+                "schema object"
+            )
         return parsed
 
     def embed(self, texts: list[str]) -> list[list[float]]:

@@ -439,7 +439,18 @@ def classify_pending(
         last_exc: Exception | None = None
         for attempt in range(_TRANSIENT_RETRIES):
             try:
-                return job.extractor.extract(job.prompt, job.schema, text=job.rendered)
+                answer = job.extractor.extract(
+                    job.prompt, job.schema, text=job.rendered
+                )
+                if not isinstance(answer, dict):
+                    # Belt to the provider's braces: a non-dict reading must
+                    # stay a per-message error — memoised into the thread
+                    # cache it crashes every sibling and the run with them.
+                    return TypeError(
+                        f"extractor returned {type(answer).__name__}, "
+                        "not a reading"
+                    )
+                return answer
             except Exception as exc:  # scored as an error in the apply phase
                 last_exc = exc
                 if _is_fatal_llm_error(exc):
