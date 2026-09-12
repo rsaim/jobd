@@ -168,6 +168,7 @@ def _stats(stats: dashboard.Stats) -> dict[str, Any]:
         "reply_lag_days": stats.reply_lag_days,
         "court_yours": stats.court_yours,
         "court_theirs": stats.court_theirs,
+        "weeks_to_offer": stats.weeks_to_offer,
     }
 
 

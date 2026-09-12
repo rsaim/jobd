@@ -334,6 +334,29 @@ export function HomePage() {
             <FunnelStrip stats={data.stats} />
             <div className="grid flex-1 grid-cols-2 gap-3 sm:grid-cols-3">
               <Stat
+                lead
+                value={`~${Math.round(data.stats.prep_hours)}h`}
+                label="Prepping"
+                sub={`the invisible half · ~${Math.round(data.stats.interview_hours + data.stats.prep_hours)}h total`}
+                hint="Estimated hours spent preparing — the half of the work no company ever sees: 30min research per recruiter screen, 2h per phone screen, 4h of DS/algo practice per technical, 8h of system design and fundamentals (OS, DBMS, networking) per onsite, plus ~2h/week of standing practice in months with any round. An estimate anchored on confirmed rounds, not a measurement."
+              />
+              <Stat
+                value={`~${Math.round(data.stats.interview_hours)}h`}
+                label="In rooms"
+                sub={`${data.stats.interviews} confirmed rounds`}
+                hint="Estimated hours actually in interviews: 30min per screen, 1h per technical, 3h per onsite, over confirmed rounds only (a recruiter screen counts when your own mail near its date shows the call happened)."
+              />
+              <Stat
+                value={
+                  data.stats.weeks_to_offer === null
+                    ? "—"
+                    : `${data.stats.weeks_to_offer.toFixed(1)}w`
+                }
+                label="To an offer"
+                sub="median, first contact → offer"
+                hint="Median weeks from the first message ever exchanged with a company to its offer, over companies that made one with a dated offer event. The number that answers 'how long does landing one actually take'."
+              />
+              <Stat
                 value={data.stats.rounds_30d}
                 label="Rounds · 30d"
                 icon={
@@ -343,34 +366,6 @@ export function HomePage() {
                 }
                 sub={`prior 30d: ${data.stats.rounds_prev_30d} · you wrote ${data.stats.outbound_30d} vs ${data.stats.outbound_prev_30d}`}
                 hint="Confirmed interview rounds in the last 30 days against the 30 before, with your own outbound mail alongside — outbound is the input, rounds are the output."
-              />
-              <Stat
-                value={
-                  data.stats.reply_lag_days === null
-                    ? "—"
-                    : data.stats.reply_lag_days < 1
-                      ? `${Math.max(1, Math.round(data.stats.reply_lag_days * 24))}h`
-                      : `${data.stats.reply_lag_days.toFixed(1)}d`
-                }
-                label="First reply"
-                sub="median wait after you write"
-                hint="Median time from your first message to a company to its first reply, across every application that answered. Calibrates whether a current silence is normal yet."
-              />
-              <Stat
-                value={data.stats.court_yours}
-                label="Your move"
-                accent={
-                  data.stats.court_yours > 0 ? "var(--status-warning)" : undefined
-                }
-                sub={`${data.stats.court_theirs} waiting on them`}
-                hint="Live conversations where their mail is the latest — the reply owed is yours. Ones already gone quiet 21+ days count as ghosted instead, not as waiting."
-              />
-              <Stat
-                lead
-                value={`~${Math.round(data.stats.interview_hours + data.stats.prep_hours)}h`}
-                label="Interview work"
-                sub={`${Math.round(data.stats.interview_hours)}h in rooms · ${Math.round(data.stats.prep_hours)}h prepping · ${data.stats.interviews} rounds`}
-                hint="The search's real cost in hours, both estimates: in-room is 30min per screen, 1h technical, 3h onsite over confirmed rounds only (a recruiter screen counts when your own mail near its date shows the call happened); prep is 30min research per recruiter screen, 2h per phone screen, 4h of DS/algo practice per technical, 8h of system design and fundamentals (OS, DBMS, networking) per onsite, plus ~2h/week of standing practice in months with any round."
               />
               <Stat
                 value={pct(data.stats.ghost_rate)}

@@ -53,6 +53,7 @@ export interface Stats {
   reply_lag_days: number | null
   court_yours: number
   court_theirs: number
+  weeks_to_offer: number | null
 }
 
 export interface ActivityCell {
