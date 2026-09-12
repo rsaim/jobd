@@ -1836,10 +1836,14 @@ def activity_calendar(
     default is what the graph shows with no range selected; it is a shape
     choice, not a claim that the record is only a year long.
 
-    `since`/`until` override it with the global range. The grid then spans
-    exactly what was asked for -- a two-year range is two years wide, and
-    the 53-week symmetry gives way to showing the window the rest of the
-    page is reporting on, which matters more than a constant width.
+    `since`/`until` can only widen the grid, never narrow it. A range longer
+    than a year spans exactly what was asked for -- a two-year range is two
+    years wide, because hiding history behind a fixed year is the bug the
+    global range existed to fix. A range *shorter* than a year keeps the
+    53-week GitHub shape: the window extends back to a full year ending at
+    the range's end, and cells outside the range simply show what happened
+    then. A three-week grid is unreadable as a heatmap, and a graph whose
+    width changes with every filter reads as a different chart each time.
     """
     end = until or (today or datetime.now(UTC).date())
     if since is not None:
@@ -1854,8 +1858,10 @@ def activity_calendar(
         )
     else:
         start = end - timedelta(days=days - 1)
-    if start > end:
-        start = end
+    # The floor: never narrower than the 53-week grid (this also covers
+    # since > until, which used to collapse the graph to a single day).
+    if (end - start).days < days - 1:
+        start = end - timedelta(days=days - 1)
     counts = daily_activity(
         conn, company_id=company_id, since=start, until=end, metric=metric
     )
