@@ -1141,7 +1141,7 @@ class StageEventRepository(Repository):
     def add(self, event: StageEvent) -> StageEvent:
         """Add, or refresh, the stage this evidence supports.
 
-        ON CONFLICT rather than a plain INSERT: `stage_event_evidence_key`
+        ON CONFLICT rather than a plain INSERT: `stage_event_evidence_legacy_key`
         (application_id, stage, evidence_message_id) is unique by design (the
         same evidence must not produce the same stage twice, I2) — but a
         reclassify (`clear_classification` + rerun, e.g. after a model swap)
@@ -1151,12 +1151,22 @@ class StageEventRepository(Repository):
         and roll back the whole message as an error rather than confirm it —
         exactly the "append, not truncate" architecture, not fought against
         it.
+
+        The conflict target names the index predicate (`WHERE derived_at IS
+        NULL`) because migration 0031 made the uniqueness *partial* — the
+        batch-derivation generations under `derived_at IS NOT NULL` carry
+        their own key. This method only ever writes classify-time events
+        (derived_at NULL), so the legacy key is the one it must match; a bare
+        column list matches no index at all and every insert throws
+        InvalidColumnReference — which is exactly what broke `jobd demo` (and
+        silently error-counted real classify runs) after 0031 landed.
         """
         new_id = self._id(
             "INSERT INTO stage_event (application_id, stage, occurred_at,"
             " evidence_message_id, confidence, extracted_by)"
             " VALUES (%s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (application_id, stage, evidence_message_id) DO UPDATE SET"
+            " ON CONFLICT (application_id, stage, evidence_message_id)"
+            " WHERE derived_at IS NULL DO UPDATE SET"
             "   occurred_at = EXCLUDED.occurred_at,"
             "   confidence = EXCLUDED.confidence,"
             "   extracted_by = EXCLUDED.extracted_by"
