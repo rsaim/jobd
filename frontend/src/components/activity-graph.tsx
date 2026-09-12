@@ -40,22 +40,30 @@ export function ActivityGraph({
 }) {
   const weeks = calendar.weeks
   const noun = calendar.metric === "messages" ? "email" : "interview"
+  // Cells cap at 15px so the graph keeps the contribution-grid shape at any
+  // column count. Without the cap a short grid (a young record, a narrow
+  // range) let flex-1 columns fill the panel and the aspect-square cells
+  // drove the row height up with them — a bar chart wearing a heatmap's
+  // clothes. The wrapper's max-width is what enforces it: 15px cells + the
+  // 3px gap, so a full 53-week year still fills, and anything narrower stays
+  // cell-sized instead of stretching.
+  const capped = !mini ? { maxWidth: `${weeks.length * 18}px` } : undefined
   return (
     <div className="flex flex-col gap-2">
-      {!mini && (
-        <div className="relative h-4">
-          {calendar.month_labels.map(([index, label]) => (
-            <span
-              key={`${index}-${label}`}
-              className="absolute font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
-              style={{ left: `${(index / weeks.length) * 100}%` }}
-            >
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className={cn(mini && "overflow-x-auto")}>
+      <div className={cn(mini && "overflow-x-auto")} style={capped}>
+        {!mini && (
+          <div className="relative mb-2 h-4">
+            {calendar.month_labels.map(([index, label]) => (
+              <span
+                key={`${index}-${label}`}
+                className="absolute font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+                style={{ left: `${(index / weeks.length) * 100}%` }}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
         <div className={cn("flex gap-[3px]", mini ? "w-max" : "w-full")}>
           {weeks.map((week, w) => (
             <div
