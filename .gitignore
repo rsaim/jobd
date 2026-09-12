@@ -100,3 +100,7 @@ docs/learned-rules.md
 # Run logs and editor state.
 /logs/
 /.vscode/
+
+# Local screenshot scratch — never commit (image-1 carries third-party PII)
+/image*.png
+/linkedin-media/
