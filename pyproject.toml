@@ -10,22 +10,21 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Saim" }]
 
-# Every dependency arrives with the milestone that actually calls it.
-#   click    M2, the CLI
-#   psycopg  M3, the derived store. Plain SQL, no ORM — the PRD picks none, and
-#            adding one here would decide that question by accident.
-#   boto3    M4, write-through to the bucket M1 provisioned.
-#   google-* M4, Gmail. BYO OAuth client per §7 — there is no shared client id
-#            anywhere in this tree, and the wizard exists so there never is one.
-#   keyring  M4, OS-side secret storage for OAuth tokens.
-#   fastapi, uvicorn  M7, the dashboard. The client is a Vite/React app in
+# Every dependency arrives with the feature that actually calls it.
+#   click    the CLI
+#   psycopg  the derived store. Plain SQL, no ORM — adding one here would
+#            decide an architecture question by accident.
+#   boto3    write-through to the optional S3 bucket.
+#   google-* Gmail. BYO OAuth client — there is no shared client id anywhere
+#            in this tree, and the wizard exists so there never is one.
+#   keyring  OS-side secret storage for OAuth tokens.
+#   fastapi, uvicorn  the dashboard. The client is a Vite/React app in
 #            frontend/ that this serves as static files; FastAPI's own job is
-#            the JSON API under /api. Filters are still URL query params (M7
-#            gate 1) and every result set still comes from one SQL call (M7
-#            gate 2), so there is no client-side app state to duplicate in
-#            M9's MCP server later. Jinja2 and python-multipart were dropped
-#            with the templates: nothing renders HTML here and nothing posts
-#            a form — every write is a JSON body.
+#            the JSON API under /api. Filters are URL query params and every
+#            result set comes from one SQL call, so there is no client-side
+#            app state to duplicate elsewhere. Jinja2 and python-multipart
+#            were dropped with the templates: nothing renders HTML here and
+#            nothing posts a form — every write is a JSON body.
 dependencies = [
     "click>=8.1",
     "psycopg[binary]>=3.2",
@@ -46,7 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.6", "mypy>=1.11"]
-# M5. Cloud/local models routed through LiteLLM (adapters/llm/litellm_provider.py) —
+# Cloud/local models routed through LiteLLM (adapters/llm/litellm_provider.py) —
 # ollama, OpenRouter, or any other LiteLLM-supported backend. Lazy-imported so a
 # default install never pays for it (see that module's docstring on why).
 # tenacity: litellm's num_retries lazy-imports it only when a retry actually
@@ -57,7 +56,7 @@ llm = ["litellm>=1.50", "tenacity>=8.0"]
 # open-source eval framework; `evals/run.py` builds its test cases and
 # metrics on it. Its own dependency tree is heavy, hence an extra.
 eval = ["deepeval>=3.0"]
-# M6, automated LinkedIn sync (adapters/linkedin/voyager_source.py). An
+# Automated LinkedIn sync (adapters/linkedin/voyager_source.py). An
 # unofficial Voyager wrapper — cookie-authed, no official message API exists.
 # Lazy-imported: a default install neither pays for it nor depends on it, and
 # the browser push paths need none of it.

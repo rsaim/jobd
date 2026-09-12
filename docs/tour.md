@@ -47,7 +47,7 @@ pip install -e .          # add ".[llm]" for model-backed extraction
 jobd migrate up
 
 # 2. Connect a mailbox (BYO Google OAuth client — docs/gmail-setup.md):
-jobd auth gmail --account you@example.com
+jobd auth gmail    # the account is read back from the OAuth token
 
 # 3. Scrape. First run walks the full strategy; --window makes it a daily:
 jobd scrape                       # full backfill
@@ -58,8 +58,8 @@ cd frontend && npm install && npm run build && cd ..
 jobd serve                        # http://127.0.0.1:8100 — /scrape is live
 ```
 
-Multiple mailboxes: repeat `jobd auth gmail` per account and pass
-`--account` per mailbox (repeatable). Every day, from cron or a scheduler:
+Multiple mailboxes: run `jobd auth gmail` once per account. Every day, from
+cron or a scheduler:
 
 ```
 15 6 * * *  jobd scrape --window 3

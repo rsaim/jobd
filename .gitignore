@@ -104,3 +104,7 @@ docs/learned-rules.md
 # Local screenshot scratch — never commit (image-1 carries third-party PII)
 /image*.png
 /linkedin-media/
+
+# Local marketing/scratch notes — not part of the project
+/linkedin-post.md
+/screenshots.md

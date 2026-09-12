@@ -1,10 +1,10 @@
-# Connecting Gmail (M4 gate 1)
+# Connecting Gmail
 
-You create the OAuth client. jobd-ai ships none, and never will.
+You create the OAuth client. jobd ships none, and never will.
 
 A shared client id would make this project a data processor for everyone who
-install it — the hosted-service posture PRD §4 permanently rule out. Cost is
-this page of setup. PRD §10 accept that cost explicitly.
+installs it — the hosted-service posture this project permanently rules out.
+The cost is this page of setup, accepted deliberately.
 
 Roughly 10 minutes, once per Google account.
 
@@ -13,7 +13,7 @@ Roughly 10 minutes, once per Google account.
 ## 1. Google Cloud project
 
 1. https://console.cloud.google.com/projectcreate
-2. Name it anything. `jobd-ai` is fine.
+2. Name it anything. `jobd` is fine.
 3. Select it.
 
 ## 2. Enable the Gmail API
@@ -48,7 +48,7 @@ Audience**. Same list.
 
 Consequence: refresh tokens expire after **7 days**. For one operator that is
 one `jobd auth gmail` per week. Going to Production mean Google CASA
-verification, which PRD §4 permanently rule out — jobd is not becoming a
+verification, which this project permanently rules out — jobd is not becoming a
 verified app that handle other people's mail.
 
 ## 4. Create the client
@@ -81,7 +81,7 @@ address back from the token, so it cannot be stored under a typo.
 
 **Google will warn "Google hasn't verified this app."** That is correct and
 expected — it is *your* unverified app, holding *your* credentials, reading
-*your* mail. Advanced → Go to jobd-ai (unsafe).
+*your* mail. Advanced → Go to jobd (unsafe).
 
 ### In a container
 
@@ -134,7 +134,7 @@ it says so rather than pretending.
 ## 6. Ingest
 
 ```bash
-export JOBD_BUCKET=$(cd infra/terraform/storage && terraform output -raw bucket_name)
+export JOBD_BUCKET=<your-s3-bucket>   # optional; filesystem store is the default
 jobd migrate up
 jobd ingest gmail --account you@gmail.com
 ```
@@ -190,7 +190,7 @@ Third run resume from the stored cursor. `api calls` collapse from
 ## What leaves your machine
 
 Your mail goes to your S3 bucket and nowhere else. Gmail already have it. No
-jobd-ai server exist. See SECURITY.md §1.
+jobd server exists. See SECURITY.md §1.
 
 M4 does not call an LLM at all — it moves bytes. The cloud-LLM disclosure begin
 in M5, and only for pre-filtered candidates.

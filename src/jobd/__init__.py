@@ -1,6 +1,6 @@
 """jobd-ai — local-first agentic personal CRM for a job search.
 
-Layout follows the hexagonal stance in docs/jobd-prd.md §6:
+Layout is hexagonal — the core never touches I/O:
 
     domain/    pure core. Imports nothing outside itself and the stdlib.
     ports/     protocols the core talks through. No I/O, no SDKs.

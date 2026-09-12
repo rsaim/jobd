@@ -69,14 +69,15 @@ flowchart TB
     classify --- resolve
     classify --- record
 
-    p5:::unbuilt
     p4:::unbuilt
     classDef unbuilt stroke-dasharray: 4 4
 ```
 
-Dashed ports are declared and not yet implemented. `Sender` stays empty until
-M8, and when it arrives it is reachable only behind a recorded human approval
-(I1) — the planner never holds it.
+Dashed ports are declared and not yet implemented (`Backup`). `Sender` is
+implemented (`adapters/gmail/sender.py`) behind the reply composer, and only
+an explicit human click reaches it (I1) — drafts never send themselves, and
+the OAuth scope is `gmail.compose`, never `gmail.modify`. No agentic path
+holds a send-capable tool.
 
 ## One message, end to end
 
@@ -138,7 +139,7 @@ been read, which raw storage cannot tell you.
 
 | Invariant | Enforced by |
 |---|---|
-| I1 · no send without recorded approval | `Sender` port unimplemented; planner holds no send-capable tool |
+| I1 · no send without recorded approval | send exists only in the reply composer, on an explicit click; scope is `gmail.compose`, never `gmail.modify` |
 | I2 · idempotent ingestion | content hash + write-once `put` + `ON CONFLICT DO NOTHING` |
 | I3 · rebuildable from raw | `services/rebuild.py`, tested by deriving twice and comparing |
 | I4 · raw mail stays in your storage | only pre-filtered candidates reach a cloud model; corpus in CI is synthetic |

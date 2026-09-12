@@ -1,4 +1,4 @@
-# Task runner for jobd-ai. `just --list` shows everything.
+# Task runner for jobd. `just --list` shows everything.
 #
 # `just up` is the canonical way to start the dashboard: it builds and runs the
 # compose stack (app + Postgres), which is what the app actually ships as. The
@@ -63,12 +63,12 @@ jobd *args:
 psql:
     docker compose exec db psql -U jobd -d jobd
 
-# Seed the synthetic mailbox — no credentials, no network.
+# Seed and classify the synthetic mailbox — needs OPENROUTER_API_KEY in .env.
 demo:
     #!/usr/bin/env bash
     set -euo pipefail
     docker compose exec app jobd migrate up
-    docker compose exec app jobd demo
+    docker compose exec -e JOBD_RUN_BUDGET=1 app jobd demo
 
 # Run the test suite against the containerised database.
 test *args:
@@ -94,8 +94,8 @@ serve-local port="8100":
     export JOBD_BUCKET="${JOBD_BUCKET:-}"
     export JOBD_PRICE_PER_MTOK_IN="${JOBD_PRICE_PER_MTOK_IN:-0.375}"
     export JOBD_PRICE_PER_MTOK_OUT="${JOBD_PRICE_PER_MTOK_OUT:-1.875}"
-    # LinkedIn companion push auth (extension/README.md). Absent file means
-    # the endpoint answers 503 — feature off, not open.
+    # LinkedIn companion push auth (the browser-extension client lives outside
+    # this repo). Absent file means the endpoint answers 503 — feature off, not open.
     if [ -f ~/.jobd_linkedin_token ]; then
         export JOBD_LINKEDIN_TOKEN="$(tr -d '[:space:]' < ~/.jobd_linkedin_token)"
     fi
@@ -114,7 +114,7 @@ linkedin-token:
     cat ~/.jobd_linkedin_token
 
 # Ingest a jobd-linkedin.json produced by the console collector
-# (extension/console-collector.js) — the no-install alternative to the
+# (a console-collector script, outside this repo) — the no-install alternative to the
 # companion extension. Posts to a running server; idempotent, so re-running an
 # overlapping window is a server-side no-op.
 linkedin-ingest file port="8100":
@@ -139,22 +139,13 @@ linkedin-ingest file port="8100":
 # Needs the linkedin extra (`pip install -e '.[linkedin]'`) and a session cookie
 # in ~/.jobd_linkedin_cookies (copy(document.cookie) from a logged-in
 # linkedin.com tab). Idempotent; safe to cron:
-#   */30 * * * * cd /workspaces/jobd-ai && just linkedin-sync >> ~/.jobd/linkedin.log 2>&1
+#   */30 * * * * cd /path/to/jobd && just linkedin-sync >> ~/.jobd/linkedin.log 2>&1
 linkedin-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     export OPENROUTER_API_KEY="$(tr -d '[:space:]' < ~/.openrouter_api_key 2>/dev/null || true)"
     export JOBD_BUCKET="${JOBD_BUCKET:-}"
     exec .venv/bin/python -m jobd.services.linkedin_sync
-
-# Extract the LinkedIn session cookie with Playwright into
-# ~/.jobd_linkedin_cookies. Default opens a real browser you log into by hand,
-# so run it on a machine WITH A SCREEN (a headless codespace has none — grab the
-# cookie there and copy the file over). Needs `pip install -e '.[linkedin-login]'`
-# and `playwright install chromium`. Headless fallback (no 2FA):
-#   LINKEDIN_EMAIL=you@x LINKEDIN_PASSWORD=… just linkedin-cookies --headless
-linkedin-cookies *args:
-    .venv/bin/python tools/linkedin_login.py {{ args }}
 
 # Stop whatever is listening on the server port.
 kill port="8100":
@@ -174,7 +165,7 @@ frontend:
 
 # The daily loop: scrape the last 3 days, then let the judge clear what the
 # classifier punted on. Wire it to cron (or run by hand each morning):
-#   0 7 * * * cd /workspaces/jobd-v2 && just daily >> ~/.jobd/daily.log 2>&1
+#   0 7 * * * cd /path/to/jobd && just daily >> ~/.jobd/daily.log 2>&1
 daily:
     #!/usr/bin/env bash
     set -euo pipefail
