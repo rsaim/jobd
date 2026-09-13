@@ -264,6 +264,7 @@ def run_wizard(
     port: int = 8765,
     open_browser: bool = False,
     manual: bool = False,
+    bind_addr: str | None = None,
     echo: Any = print,
     prompt: Callable[[str], str] = input,
 ) -> str:
@@ -284,6 +285,11 @@ def run_wizard(
             open, and a silently failing launch looks like a hang.
         manual: Skip the callback server and have the user paste the code back.
             For anywhere the port cannot be forwarded.
+        bind_addr: Interface the callback server binds, when it must differ
+            from the `localhost` in the redirect URI. A published Docker port
+            forwards to the container's external interface, so a server bound
+            to the container's loopback never hears the callback — bind
+            0.0.0.0 there while Google still redirects to localhost.
         echo: Injected for tests and for click's echo.
         prompt: Injected so the manual path is testable without a terminal.
     """
@@ -303,6 +309,7 @@ def run_wizard(
         try:
             creds = flow.run_local_server(
                 port=port,
+                bind_addr=bind_addr,
                 open_browser=open_browser,
                 # Without these two, Google returns no refresh token on a second
                 # consent, and the daemon silently stops working when the access

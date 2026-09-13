@@ -70,12 +70,43 @@ demo:
     docker compose exec app jobd migrate up
     docker compose exec app jobd demo
 
-# Copy one account's Gmail OAuth token from this machine's secret store
-# (macOS keychain, or the ~/.jobd/secrets file fallback) into the app
-# container, so the dashboard's Sync button can actually reach Gmail. The
-# container side is a 0600 file that dies with the container — re-run this
-# after any `just up` that recreates it. No credential on this machine yet?
-# Mint one first: `jobd auth gmail --account you@example.com`.
+# The OAuth client JSON lands in the container's persistent /root/.jobd
+# volume (found from: the argument, then ~/.jobd/gmail_client_secret.json,
+# then a single client_secret*.json in ~/Downloads), then the consent wizard
+# runs inside the container with the callback port published (compose maps
+# 8765) — open the printed URL, approve, done. The account is read back from
+# the token, so there is nothing to typo.
+# Connect a Gmail account to the app container: one command, browser consent, token persists.
+gmail-auth client_secret="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{ client_secret }}"
+    if ! docker compose exec -T app test -f /root/.jobd/gmail_client_secret.json 2>/dev/null; then
+        if [ -z "$src" ] && [ -f ~/.jobd/gmail_client_secret.json ]; then
+            src=~/.jobd/gmail_client_secret.json
+        fi
+        if [ -z "$src" ]; then
+            candidates=(~/Downloads/client_secret*.json)
+            if [ ${#candidates[@]} -eq 1 ] && [ -f "${candidates[0]}" ]; then
+                src="${candidates[0]}"
+                echo "using OAuth client JSON: ${src}"
+            fi
+        fi
+        if [ -z "$src" ]; then
+            echo "error: no OAuth client JSON found. Create a Desktop-app OAuth client in" >&2
+            echo "your own Google Cloud project (APIs & Services > Credentials), download" >&2
+            echo "the JSON, then: just gmail-auth path/to/client_secret.json" >&2
+            exit 1
+        fi
+        docker compose exec -T app sh -c 'mkdir -p /root/.jobd && umask 077 && cat > /root/.jobd/gmail_client_secret.json' < "$src"
+    fi
+    docker compose exec app jobd auth gmail --bind 0.0.0.0
+    echo "done — the dashboard's Sync button can reach Gmail now."
+
+# For tokens minted on the host with a local `jobd auth gmail` (macOS
+# keychain or the ~/.jobd/secrets file fallback). Fresh setups want
+# `just gmail-auth` instead, which needs no host install.
+# Copy one account's Gmail token from the host secret store into the app container.
 gmail-token account:
     #!/usr/bin/env bash
     set -euo pipefail

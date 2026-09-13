@@ -65,9 +65,17 @@ services:
       JOBD_PRICE_PER_MTOK_OUT: "0.13"
     volumes:
       - rawstore:/data
+      # Gmail tokens and the OAuth client JSON live under /root/.jobd (the
+      # container has no OS keyring, so TokenStore falls back to files).
+      # Without this volume every recreate silently logs the mailbox out.
+      - jobdhome:/root/.jobd
     ports:
       - "8100:8100"
+      # OAuth consent callback for `just gmail-auth` — only listens during
+      # the wizard, dead air otherwise.
+      - "8765:8765"
 
 volumes:
   pgdata:
   rawstore:
+  jobdhome:

@@ -582,8 +582,17 @@ def auth() -> None:
     help="No callback server: paste the redirect URL back yourself. Use when the "
     "port cannot be forwarded (plain SSH, bare docker run, remote host).",
 )
+@click.option(
+    "--bind",
+    "bind_addr",
+    default=None,
+    help="Interface the callback server binds (the redirect URI stays "
+    "localhost). Inside docker compose use 0.0.0.0 so the published port "
+    "actually reaches the server — or run `just gmail-auth`, which does.",
+)
 def auth_gmail(
-    client_secret: Path, port: int, open_browser: bool, manual: bool
+    client_secret: Path, port: int, open_browser: bool, manual: bool,
+    bind_addr: str | None,
 ) -> None:
     """Run the Gmail consent flow and store the token.
 
@@ -603,6 +612,7 @@ def auth_gmail(
             port=port,
             open_browser=open_browser,
             manual=manual,
+            bind_addr=bind_addr,
             echo=click.echo,
         )
     except AuthError as exc:

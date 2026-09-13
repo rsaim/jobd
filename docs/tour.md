@@ -59,10 +59,13 @@ jobd serve                        # http://127.0.0.1:8100 — /scrape is live
 ```
 
 The dashboard's Sync button runs inside the app container, which has its
-own secret store — hand it your token with `just gmail-token
-you@example.com` (repeat after recreating the container). Paid runs are
-capped by `JOBD_RUN_BUDGET` (default $2 in compose; raise it in `.env`
-for a full backfill).
+own secret store on a persistent volume. `just gmail-auth` connects an
+account to it end to end: it copies your OAuth client JSON in, runs the
+consent wizard with the callback port published, and the token survives
+container recreations. (A token already minted on the host moves over
+with `just gmail-token you@example.com`.) Paid runs are capped by
+`JOBD_RUN_BUDGET` (default $2 in compose; raise it in `.env` for a full
+backfill).
 
 Multiple mailboxes: run `jobd auth gmail` once per account. Every day, from
 cron or a scheduler:
