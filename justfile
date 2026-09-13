@@ -70,6 +70,31 @@ demo:
     docker compose exec app jobd migrate up
     docker compose exec app jobd demo
 
+# Copy one account's Gmail OAuth token from this machine's secret store
+# (macOS keychain, or the ~/.jobd/secrets file fallback) into the app
+# container, so the dashboard's Sync button can actually reach Gmail. The
+# container side is a 0600 file that dies with the container — re-run this
+# after any `just up` that recreates it. No credential on this machine yet?
+# Mint one first: `jobd auth gmail --account you@example.com`.
+gmail-token account:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    .venv/bin/python - "{{ account }}" <<'PY' | docker compose exec -T app python -c 'import json, sys; d = sys.stdin.read().strip(); sys.exit(1) if not d else None; from jobd.adapters.gmail.auth import token_key; from jobd.adapters.secrets import TokenStore; s = TokenStore(); s.save(token_key(sys.argv[1]), json.loads(d)); print(f"stored gmail token for {sys.argv[1]} in the app container ({s.backend})")' "{{ account }}"
+    import json
+    import sys
+
+    from jobd.adapters.gmail.auth import token_key
+    from jobd.adapters.secrets import TokenStore
+
+    blob = TokenStore().load(token_key(sys.argv[1]))
+    if blob is None:
+        sys.exit(
+            f"error: no stored Gmail credential for {sys.argv[1]!r} — "
+            f"run: jobd auth gmail --account {sys.argv[1]}"
+        )
+    json.dump(blob, sys.stdout)
+    PY
+
 # Run the test suite against the containerised database.
 test *args:
     DATABASE_URL="$(just db-url)" .venv/bin/python -m pytest -q {{ args }}

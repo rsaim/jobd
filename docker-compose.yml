@@ -40,6 +40,11 @@ services:
       # Optional, for LLM extraction and the chat dock — the demo and the
       # rule-based pipeline never read it:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Max dollars a paid run may spend (the CreditGuard ceiling). The
+      # default keeps the dashboard's Sync button usable out of the box while
+      # still hard-capping a runaway run at pocket change; raise it in .env
+      # for a full backfill. The CLI's per-run --budget flag still overrides.
+      JOBD_RUN_BUDGET: ${JOBD_RUN_BUDGET:-2.00}
       # The company-summary card and the chat dock stay off until this is set
       # (a 404, not an error — see api.py's chat_turn). It is separate from
       # JOBD_MODEL on purpose: the extractor runs over the whole mailbox and
