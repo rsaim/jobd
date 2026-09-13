@@ -69,6 +69,13 @@ no accuracy loss.
 
 ## Quickstart — one API key
 
+No local setup at all:
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rsaim/jobd)
+— GitHub prompts for the key, the stack builds itself, the demo classifies
+in the background, and the dashboard opens on port 8100.
+
+Or locally:
+
 ```bash
 export OPENROUTER_API_KEY=<your key>  # the demo's ~100 flash calls cost cents
 docker compose up -d --build

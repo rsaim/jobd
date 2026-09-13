@@ -1,0 +1,24 @@
+{
+  "name": "jobd — demo in one click",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [8100],
+  "portsAttributes": {
+    "8100": {
+      "label": "jobd dashboard",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "secrets": {
+    "OPENROUTER_API_KEY": {
+      "description": "OpenRouter API key (openrouter.ai/keys). The demo's ~100 flash-class calls cost about a cent; without a key the stack still builds and the dashboard serves, but classification waits until you add one."
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb"
+  }
+}
