@@ -71,4 +71,16 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
 
     database_url = source.get("DATABASE_URL") or None
     chat_model = source.get("JOBD_CHAT_MODEL") or None
+    if (
+        chat_model
+        and chat_model.startswith("openrouter/")
+        and not (source.get("OPENROUTER_API_KEY") or "").strip()
+    ):
+        # docker-compose defaults JOBD_CHAT_MODEL so that setting the one
+        # secret is enough to turn chat on — which leaves a keyless deploy
+        # (the Codespaces demo) *looking* configured while every call 401s
+        # mid-stream. A model that cannot authenticate is not configured:
+        # the dock stays hidden and the summary card says so, instead of
+        # both surfacing a raw AuthenticationError.
+        chat_model = None
     return Settings(profile=profile, database_url=database_url, chat_model=chat_model)

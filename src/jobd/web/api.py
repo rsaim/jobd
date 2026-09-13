@@ -1957,6 +1957,16 @@ def scrape_start(body: ScrapeStartBody) -> dict[str, Any]:
         accounts = [str(r[0]) for r in rows]
     if not accounts:
         return _err("No accounts connected. Run `jobd auth gmail` first.")
+    from jobd.services.demo import DEMO_ACCOUNT
+
+    if all(a == DEMO_ACCOUNT for a in accounts):
+        # The demo corpus is mail that never existed — a sync would march
+        # straight into Gmail auth and budget refusals and land as a scary
+        # "Last run failed" on a record that is working exactly as intended.
+        return _err(
+            "This record is the synthetic demo corpus — there is no Gmail "
+            "behind it to sync. Connect a real mailbox first (docs/tour.md)."
+        )
     # Synchronous preflight so a dead AWS session answers the click itself,
     # not an error banner half a minute into a doomed run.
     from jobd.scrape.service import ScrapeConfigError, check_raw_storage
