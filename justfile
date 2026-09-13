@@ -81,7 +81,12 @@ gmail-auth client_secret="":
     #!/usr/bin/env bash
     set -euo pipefail
     src="{{ client_secret }}"
-    if ! docker compose exec -T app test -f /root/.jobd/gmail_client_secret.json 2>/dev/null; then
+    # An explicit argument always replaces what the container holds — the
+    # first fix for "I authed against the wrong project" must not be blocked
+    # by the wrong JSON already sitting in the volume.
+    if [ -z "$src" ] && docker compose exec -T app test -f /root/.jobd/gmail_client_secret.json 2>/dev/null; then
+        echo "using the client JSON already in the container (pass a path to replace it)"
+    else
         if [ -z "$src" ] && [ -f ~/.jobd/gmail_client_secret.json ]; then
             src=~/.jobd/gmail_client_secret.json
         fi
@@ -89,7 +94,6 @@ gmail-auth client_secret="":
             candidates=(~/Downloads/client_secret*.json)
             if [ ${#candidates[@]} -eq 1 ] && [ -f "${candidates[0]}" ]; then
                 src="${candidates[0]}"
-                echo "using OAuth client JSON: ${src}"
             fi
         fi
         if [ -z "$src" ]; then
@@ -98,6 +102,13 @@ gmail-auth client_secret="":
             echo "the JSON, then: just gmail-auth path/to/client_secret.json" >&2
             exit 1
         fi
+        # Say WHOSE client this is before consenting to it: the consent screen
+        # is per-project, and a stray client_secret*.json from an unrelated
+        # project 403s with that project's name on it.
+        project="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next(iter(d.values())).get("project_id","?"))' "$src")"
+        echo "using OAuth client JSON: ${src}"
+        echo "  -> Google Cloud project: ${project}"
+        echo "  (your Gmail address must be a test user on THIS project's consent screen)"
         docker compose exec -T app sh -c 'mkdir -p /root/.jobd && umask 077 && cat > /root/.jobd/gmail_client_secret.json' < "$src"
     fi
     docker compose exec app jobd auth gmail --bind 0.0.0.0
