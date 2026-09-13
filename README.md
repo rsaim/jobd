@@ -67,23 +67,26 @@ immediately. The loop is a testable claim, so it has a test:
 `evals/run.py --learning` asserts a second pass costs fewer model calls at
 no accuracy loss.
 
-## Quickstart — one API key
+## Quickstart — no credentials
 
 No local setup at all:
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rsaim/jobd)
-— GitHub prompts for the key, the stack builds itself, the demo classifies
-in the background, and the dashboard opens on port 8100.
+— the stack builds itself, the demo loads, the dashboard opens on port 8100.
 
 Or locally:
 
 ```bash
-export OPENROUTER_API_KEY=<your key>  # the demo's ~100 flash calls cost cents
 docker compose up -d --build
 docker compose exec app jobd migrate up
-# JOBD_RUN_BUDGET is the hard dollar ceiling classify refuses to run without
-docker compose exec -e JOBD_RUN_BUDGET=1 app jobd demo
+docker compose exec app jobd demo
 # open http://localhost:8100
 ```
+
+The demo needs no key: its corpus is synthetic, so classification replays
+the gold labels through the real pipeline — prefilter, thread carry, the
+learning loop teaching rules — deterministically and offline. A model (and
+`OPENROUTER_API_KEY` + `JOBD_RUN_BUDGET`) enters the picture for live
+classify runs against real mail, the chat dock, and summaries.
 
 ![The demo: open a company you never told it about, and the hiring process
 is already reconstructed — timeline, stages, summary](docs/img/demo.gif)

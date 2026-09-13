@@ -63,12 +63,12 @@ jobd *args:
 psql:
     docker compose exec db psql -U jobd -d jobd
 
-# Seed and classify the synthetic mailbox — needs OPENROUTER_API_KEY in .env.
+# Seed and classify the synthetic mailbox — no credentials, no network.
 demo:
     #!/usr/bin/env bash
     set -euo pipefail
     docker compose exec app jobd migrate up
-    docker compose exec -e JOBD_RUN_BUDGET=1 app jobd demo
+    docker compose exec app jobd demo
 
 # Run the test suite against the containerised database.
 test *args:

@@ -640,6 +640,13 @@ def _connect() -> Any:
 
 
 def _llm(model: str, *, credit_guard: Any = None) -> Any:
+    if model == "demo-gold":
+        # The demo's replay extractor: answers from the synthetic corpus's
+        # gold labels — no key, no network, no guard (nothing is spent).
+        # Only `jobd demo` wires this id; it is not a real provider.
+        from jobd.services.demo import GoldReplayExtractor
+
+        return GoldReplayExtractor()
     from jobd.adapters.llm import load_provider
 
     return load_provider(model, credit_guard=credit_guard)
@@ -1267,11 +1274,12 @@ def demo(ctx: click.Context, local_store: Path) -> None:
 
     One believable search (offers, rejections, a ghosting, an agency, bulk
     noise) is ingested through the real pipeline into a filesystem raw
-    store, then classified with the configured model (JOBD_MODEL or the
-    default — needs its API key, e.g. OPENROUTER_API_KEY; the old keyless
-    rule-based tier was removed when classification rules went dynamic).
-    Safe on a fresh database; refuses one that already holds the demo
-    account.
+    store, then classified by replaying the corpus's gold labels through
+    the real classify path (`GoldReplayExtractor`) — the truth is known by
+    construction, so no model, key, or budget is needed and the result is
+    deterministic. Point JOBD_MODEL at a real model *after* the demo if you
+    want to watch a live run; the demo itself never goes online. Safe on a
+    fresh database; refuses one that already holds the demo account.
     """
     from jobd.services.demo import DEMO_ACCOUNT, seed_demo
 
@@ -1296,7 +1304,7 @@ def demo(ctx: click.Context, local_store: Path) -> None:
     )
     ctx.invoke(
         classify,
-        model="default",
+        model="demo-gold",
         limit=1000,
         run_all=True,
         embed=False,

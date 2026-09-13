@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Codespace bootstrap: bring up the stack the README documents, then — if a
-# key arrived via the Codespaces secret prompt — run the demo in the
-# background so the dashboard is populated by the time anyone looks at it.
+# Codespace bootstrap: build the stack, migrate, and run the demo — which
+# needs no credentials (classification replays the synthetic corpus's gold
+# labels through the real pipeline). By the time the forwarded port opens,
+# the dashboard is populated.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -12,24 +13,11 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 docker compose exec app jobd migrate up
+# Refuses a database that already holds the demo, so rebuilds don't re-seed.
+docker compose exec -T app jobd demo || true
 
-if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-  # Idempotent by design upstream: jobd demo refuses a database that already
-  # holds the demo account, so a container rebuild doesn't double-seed.
-  echo "OPENROUTER_API_KEY found — seeding and classifying the demo mailbox in the background."
-  echo "Watch it live on the Runs page; every dashboard page fills as it finishes."
-  nohup docker compose exec -T \
-      -e OPENROUTER_API_KEY -e JOBD_RUN_BUDGET=1 \
-      app jobd demo > /tmp/jobd-demo.log 2>&1 &
-else
-  cat <<'MSG'
-No OPENROUTER_API_KEY set. The dashboard is up (port 8100) but empty.
-To load the demo (~100 flash-class calls, costs about a cent):
-
-  1. Get a key at https://openrouter.ai/keys
-  2. export OPENROUTER_API_KEY=sk-or-...
-  3. docker compose exec -e OPENROUTER_API_KEY -e JOBD_RUN_BUDGET=1 app jobd demo
-
-MSG
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+  echo "Demo loaded. Optional: set OPENROUTER_API_KEY (openrouter.ai/keys) to"
+  echo "also enable the chat dock and company summaries, then: docker compose up -d"
 fi
 echo "jobd is up: open the forwarded port 8100."

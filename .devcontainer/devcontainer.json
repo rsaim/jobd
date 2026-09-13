@@ -1,10 +1,12 @@
 {
-  "name": "jobd — demo in one click",
+  "name": "jobd \u2014 demo in one click",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
-  "forwardPorts": [8100],
+  "forwardPorts": [
+    8100
+  ],
   "portsAttributes": {
     "8100": {
       "label": "jobd dashboard",
@@ -13,7 +15,7 @@
   },
   "secrets": {
     "OPENROUTER_API_KEY": {
-      "description": "OpenRouter API key (openrouter.ai/keys). The demo's ~100 flash-class calls cost about a cent; without a key the stack still builds and the dashboard serves, but classification waits until you add one."
+      "description": "Optional. The demo itself needs no key (it replays gold labels through the real pipeline). A key from openrouter.ai/keys additionally enables the chat dock, company summaries, and live-model classify runs."
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",

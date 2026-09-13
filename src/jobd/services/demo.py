@@ -753,4 +753,105 @@ def seed_demo(*, storage: Any, messages: Any, conn: Any) -> dict[str, int]:
     }
 
 
-__all__ = ["DEMO_ACCOUNT", "demo_messages", "seed_demo"]
+__all__ = ["DEMO_ACCOUNT", "GoldReplayExtractor", "demo_messages", "seed_demo"]
+
+
+class GoldReplayExtractor:
+    """The demo's "model": answers extraction calls from the gold labels.
+
+    `jobd demo` used to need a real model (and therefore an API key and a
+    run budget) because the keyless rule-based tier was removed. But the
+    demo corpus is synthetic — its truth is known by construction
+    (`demo_gold.GOLD`, the same list the eval scores against) — so paying a
+    model to rediscover it taught a viewer nothing about the pipeline and
+    cost them a signup. This class implements the extractor port by looking
+    the answer up instead: zero credentials, zero network, deterministic.
+
+    Everything downstream is still the real pipeline — prefilter, thread
+    carry, the learning loop teaching sender rules, stage derivation. Only
+    the reading is replayed. A real mailbox still needs a real model; the
+    CLI only wires this in for the demo account's run.
+    """
+
+    #: What the run metadata and the credit-guard model list call this
+    #: extractor. Not an OpenRouter id on purpose: `_credit_guard` sees a
+    #: non-"openrouter/" name and correctly builds no guard.
+    name = "demo-gold"
+    #: True in the sense the flag exists to convey: nothing leaves the
+    #: machine. `classify` prints it and the classified_by stamp carries
+    #: `name`, so the record says how each row was decided.
+    is_local = True
+
+    def __init__(self) -> None:
+        from jobd.services.demo_gold import GOLD, check_alignment
+
+        check_alignment(len(_MAILS))
+        self._entries = list(zip(_MAILS, GOLD, strict=True))
+
+    def extract(
+        self, prompt: str, schema: dict[str, Any], *, text: str
+    ) -> dict[str, Any]:
+        # The render always carries the subject and the body verbatim, and
+        # demo bodies are unique by construction — a snippet identifies the
+        # message. A thread render contains every sibling; the latest one
+        # (entries are oldest-first per thread) is the thread's reading,
+        # matching how a live model reads a quoted chain top-down.
+        matches = [
+            (mail, gold)
+            for mail, gold in self._entries
+            if mail.subject in text and mail.body[:80] in text
+        ]
+        if not matches:
+            raise ValueError(
+                "gold replay: no demo message matches this render — the "
+                "demo dataset and demo_gold drifted apart"
+            )
+        mail, gold = matches[-1]
+
+        inbound = mail.sender != DEMO_ACCOUNT
+        contact_domain = (mail.sender if inbound else mail.to).rsplit("@", 1)[-1]
+        slug = "".join(c for c in (gold.company or "").lower() if c.isalnum())
+        dom_label = contact_domain.split(".", 1)[0]
+        own_domain = bool(slug) and (
+            slug.startswith(dom_label) or dom_label.startswith(slug)
+        )
+
+        payload: dict[str, Any] = {
+            "label": "positive" if gold.job_related else "negative",
+            "company_name": gold.company,
+            "company_domain": contact_domain if own_domain else None,
+            "company_kind": "employer" if gold.company else None,
+            "role_title": None,
+            "stage": gold.stage,
+            "contact_name": None,
+            "contact_email": mail.sender if inbound and gold.job_related else None,
+            "occurred_at": None,  # classify falls back to the message date
+        }
+        if "agency_name" in schema.get("properties", {}):
+            # Thread schema: name the agency when the sender's domain is not
+            # the employer the thread is about (the two demo agencies).
+            agency = gold.job_related and gold.company is not None and not own_domain
+            payload["agency_name"] = None
+            payload["agency_domain"] = contact_domain if agency else None
+            payload["client_companies"] = (
+                [{"name": gold.company, "domain": None, "role_title": None}]
+                if agency
+                else []
+            )
+            stage_rel = {
+                "applied": "application",
+                "recruiter_screen": "interview_process",
+                "phone_screen": "interview_process",
+                "technical": "interview_process",
+                "onsite": "interview_process",
+                "offer": "offer",
+                "accepted": "offer",
+                "declined": "offer",
+                "rejected": "rejection",
+            }
+            payload["relationship"] = (
+                stage_rel.get(gold.stage or "", "outreach")
+                if gold.job_related
+                else None
+            )
+        return payload
