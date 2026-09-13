@@ -39,25 +39,17 @@ what returns, and lets every confident hit teach new senders to search —
 looping until the frontier is empty (1–2 hops), then sweeping the
 direct-addressed mail nothing matched.
 
-```mermaid
-flowchart LR
-    plan([plan]) --> search --> fetch --> classify{{classify}} --> learn
-    learn == "new senders,<br/>domains, threads" ==> search
-    learn --> sweep["sweep the<br/>direct-mail residual"] ==> search
-    learn --> report([report])
-    classify -. "confident hits teach rules;<br/>negatives silence senders" .-> learn
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/seed-expand-loop-dark.png">
+  <img alt="The seed-and-expand loop: search, fetch, classify, learn, and a sweep of the
+direct-mail residual run clockwise, while classify and learn write distilled
+sender rules into a central hub — so every pass costs less than the one
+before" src="docs/img/seed-expand-loop.png">
+</picture>
 
-    classDef step fill:#1f6feb,stroke:#0d419d,color:#ffffff,stroke-width:1.5px
-    classDef verdict fill:#e8912d,stroke:#9e6a03,color:#ffffff,stroke-width:1.5px
-    classDef loop fill:#8250df,stroke:#5b2da8,color:#ffffff,stroke-width:2px
-    classDef ends fill:#57606a,stroke:#424a53,color:#ffffff
-    class search,fetch step
-    class classify verdict
-    class learn,sweep loop
-    class plan,report ends
-    linkStyle 4,6 stroke:#8250df,stroke-width:2.5px
-    linkStyle 8 stroke:#e8912d,stroke-width:2px
-```
+*`plan` seeds the first search; `report` closes the run once the frontier is
+empty. The dashed spokes are the part that compounds: model verdicts distill
+into standing rules, so the next pass asks the model less.*
 
 No hardcoded rules anywhere. A first confident extraction teaches a sender
 domain `undecided`; a second one *resolving to the same company* promotes
