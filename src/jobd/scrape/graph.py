@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -79,8 +79,8 @@ class _LiveMeter:
 
     `classify_pending` reports through the meter protocol; this forwards
     everything to a real `RunMeter` — so the Runs page gets the same live
-    row a CLI classify writes (items, rate, ETA, spend, and the scraped
-    mail window in ``args``) — and mirrors the phase-2 per-call ticks onto
+    row a CLI classify writes (items, rate, ETA, spend, and the pending
+    mail's date range in ``args``) — and mirrors the phase-2 per-call ticks onto
     the SSE stream as throttled ``classify_progress`` frames, tokens and
     cost read live off the provider's own counters.
 
@@ -139,27 +139,30 @@ class _LiveMeter:
 def _live_meter(ctx: RunContext, state: ScrapeState) -> _LiveMeter:
     """One pipeline_run row per classify leg, bridged to the scrape stream.
 
-    ``args`` carries the scraped mail window (``mail_since``/``mail_until``)
-    so the Runs page can say *which dates* a sync covered, not just how wide
-    the window was. Total is the current unclassified count — exactly the
-    backlog this leg will drain, since `classify` loops until nothing is
-    pending, not just over this run's fetches.
+    ``args`` carries the sent-date range of the pending mail
+    (``mail_since``/``mail_until``) so the Runs page says which dates this
+    leg is *classifying* — NOT the sync's search window. The two diverge
+    exactly when it matters: the leg drains everything unclassified, and a
+    1-day sync that inherits a months-old backlog would otherwise wear a
+    "mail Sep 14 → Sep 15" label while chewing through February (the
+    live-caught confusion that added this). The search window itself is the
+    scrape_run row's job. Total is the same pending count — the backlog
+    this leg will drain, since `classify` loops until nothing is pending.
     """
     from jobd.services.metrics import RunMeter
 
-    window = state["window_days"]
-    until = datetime.now(UTC).date()
     args: dict[str, Any] = {
         "source": "scrape",
         "model": getattr(ctx.llm, "name", "?"),
-        "window_days": window,
-        "mail_until": until.isoformat(),
+        "window_days": state["window_days"],
     }
-    if window:
-        args["mail_since"] = (until - timedelta(days=window)).isoformat()
     remaining = ctx.conn.execute(
-        "SELECT count(*) FROM message WHERE classified_at IS NULL"
+        "SELECT count(*), min(sent_at)::date, max(sent_at)::date"
+        " FROM message WHERE classified_at IS NULL"
     ).fetchone()
+    if remaining and remaining[1] is not None:
+        args["mail_since"] = remaining[1].isoformat()
+        args["mail_until"] = remaining[2].isoformat()
     inner = RunMeter.start(
         kind="classify",
         total=int(remaining[0]) if remaining else None,

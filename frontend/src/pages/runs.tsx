@@ -66,10 +66,11 @@ const KIND_LABEL: Record<string, string> = {
   backfill: "Envelope backfill",
 }
 
-/** "mail Sep 14 → Sep 15" when the run recorded which dates it scraped —
- *  the dashboard sync's classify leg writes mail_since/mail_until into
- *  args. Re-running the same dates is safe by design (idempotent ingest);
- *  showing them is what makes that visible. */
+/** "mail Feb 22 → Sep 14" when the run recorded the sent-date range of the
+ *  mail it worked on — the dashboard sync's classify leg writes
+ *  mail_since/mail_until into args. This is the mail being classified, not
+ *  the sync's search window: the leg drains every pending message, so a
+ *  1-day sync inheriting a backlog honestly shows months, not days. */
 function mailWindow(run: PipelineRun): string | null {
   const since = run.args?.mail_since as string | undefined
   const until = run.args?.mail_until as string | undefined
