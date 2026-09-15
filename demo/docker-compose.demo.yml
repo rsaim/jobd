@@ -1,0 +1,47 @@
+# Overlay for the public demo VM. Every compose command takes both files:
+#
+#   docker compose -f docker-compose.yml -f demo/docker-compose.demo.yml ...
+#
+# (demo-restart.sh wraps that.) What it changes against the base file:
+#
+#   * Caddy in front: TLS on 80/443, the landing page, basic auth (demo/demo).
+#   * No app or db port is published on the host — the only way in is Caddy.
+#     (`!reset` needs compose v2.24+; the get.docker.com install has it.)
+#   * Caddy's storage is a pair of external volumes, so the nightly `down -v`
+#     reset cannot delete certificates and trip Let's Encrypt rate limits.
+#
+# Host paths are relative to the repo root: with multiple -f files, compose
+# resolves paths against the first file's directory.
+
+services:
+  app:
+    ports: !reset []
+    restart: unless-stopped
+
+  db:
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DEMO_DOMAIN: ${DEMO_DOMAIN:?missing — demo/bootstrap.sh writes it to .env}
+    volumes:
+      - ./demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./demo/landing:/srv/landing:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+    external: true
+    name: jobd_demo_caddy_data
+  caddy_config:
+    external: true
+    name: jobd_demo_caddy_config

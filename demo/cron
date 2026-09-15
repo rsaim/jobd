@@ -1,0 +1,7 @@
+# The nightly reset. Install with:
+#
+#   crontab demo/cron
+#
+# Adjust the path if the checkout is not at ~/jobd. 04:10 UTC is chosen to
+# land in the quiet hours of both US and EU time.
+10 4 * * * flock -n /tmp/jobd-demo-reset.lock $HOME/jobd/demo/demo-restart.sh >> $HOME/jobd-demo-reset.log 2>&1

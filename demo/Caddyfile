@@ -1,0 +1,42 @@
+# The public demo's front door. One hostname, three behaviors:
+#
+#   /        unauthenticated  -> the landing page (demo/landing)
+#   /login   basic auth       -> redirect to /, now authenticated
+#   *        basic auth       -> the app container
+#
+# The landing matcher keys on the absence of an Authorization header. A first
+# visit to / gets the landing page; the "log in" button points at /login,
+# which triggers the auth prompt and bounces back to / — and from then on the
+# browser sends credentials with every request, so the same URL serves the
+# Today dashboard.
+#
+# DEMO_DOMAIN comes from the environment (bootstrap.sh writes it to .env);
+# Caddy provisions and renews the certificate on its own.
+
+{$DEMO_DOMAIN} {
+	encode gzip
+
+	@landing {
+		path /
+		not header Authorization *
+	}
+	handle @landing {
+		root * /srv/landing
+		file_server
+	}
+
+	handle {
+		# route{} preserves written order — without it Caddy's directive
+		# sorting runs redir before basic_auth and /login never prompts.
+		route {
+			# Public by design: the user is "demo", the password is
+			# "demo", and the hash below is bcrypt("demo"). This is a
+			# speed bump for crawlers and scanners, not a secret.
+			basic_auth {
+				demo $2a$14$yVRD58jenonnoiDIuyizxOm5PEs5smX4P13U/rpmtv64.6h5Xq/7.
+			}
+			redir /login / 302
+			reverse_proxy app:8100
+		}
+	}
+}
