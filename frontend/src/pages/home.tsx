@@ -8,7 +8,8 @@
  * were a taxonomy of *why* a row needs you, not a distinction that changes
  * what you do about it. They're merged: anything that needs a reply from
  * you, or is about to go silent long enough to read as ghosted, lands in
- * Review, sorted by urgency. A process that is simply moving — no action
+ * Review, last touch first (re-sortable by any measured column — the
+ * ordering lives in BriefingTable). A process that is simply moving — no action
  * due — needs no row here at all; it stays visible on Companies, and only
  * its count survives, in the stats band below. The counts, the graph and
  * the queue depth are context and sit underneath: a page opened twenty
@@ -275,12 +276,12 @@ export function HomePage() {
   const keep = (row: BriefingRow) => matches(haystack(row), words)
 
   // One list, not three: a reply overdue and a thread about to go quiet are
-  // both "needs you", sorted together by how urgent the silence is (module
-  // docstring). `in_flight` still gets fetched — its count feeds the "Moving"
-  // stat below — but a process with no action due gets no row here.
-  const review = [...data.waiting, ...data.cold]
-    .filter(keep)
-    .sort((a, b) => b.days_silent - a.days_silent)
+  // both "needs you". Ordering belongs to the table now (BriefingTable
+  // defaults to last touch, newest first, with every measured column a
+  // click away) — sorting here would be overridden on render. `in_flight`
+  // still gets fetched — its count feeds the "Moving" stat below — but a
+  // process with no action due gets no row here.
+  const review = [...data.waiting, ...data.cold].filter(keep)
   const shown = review.length
   const held = data.waiting.length + data.cold.length
 

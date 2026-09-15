@@ -14,10 +14,12 @@
  * comparison rather than as a decoration on a card.
  */
 
+import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
 
 import type { BriefingRow } from "@/lib/api"
-import { fmtIso } from "@/lib/record"
+import { fmtIso, MAIN_STAGES, TERMINAL_OUTCOMES } from "@/lib/record"
 import { Card } from "@/components/ui/card"
 import {
   Table,
@@ -31,6 +33,71 @@ import { CompanyMark } from "@/components/company-mark"
 import { Marked } from "@/components/highlight"
 import { KindBadge, SilenceRail, StageBadge } from "@/components/record-marks"
 
+type SortKey = "company" | "stage" | "silence" | "touch"
+
+/** Process order, so sorting by stage reads as progression rather than as
+ *  the alphabet's opinion of it (onsite before applied). Outcomes rank past
+ *  the live stages: a finished process sorts after one still moving. */
+const STAGE_RANK: Record<string, number> = Object.fromEntries(
+  [...MAIN_STAGES, ...TERMINAL_OUTCOMES].map((s, i) => [s, i]),
+)
+
+/** Descending feels primary for every column but the name: most recent
+ *  touch, longest silence, furthest along. */
+const DEFAULT_DIR: Record<SortKey, 1 | -1> = {
+  company: 1,
+  stage: -1,
+  silence: -1,
+  touch: -1,
+}
+
+function compare(a: BriefingRow, b: BriefingRow, key: SortKey): number {
+  switch (key) {
+    case "company":
+      return a.canonical_name.localeCompare(b.canonical_name)
+    case "stage":
+      return (STAGE_RANK[a.status] ?? -1) - (STAGE_RANK[b.status] ?? -1)
+    case "silence":
+      return a.days_silent - b.days_silent
+    case "touch":
+      // ISO strings order lexically; a row with no date sorts to the bottom
+      // in either direction rather than pretending to be the epoch.
+      return (a.last_message_at ?? "").localeCompare(b.last_message_at ?? "")
+  }
+}
+
+function SortHead({
+  label,
+  col,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string
+  col: SortKey
+  sort: { key: SortKey; dir: 1 | -1 }
+  onSort: (col: SortKey) => void
+  className?: string
+}) {
+  const active = sort.key === col
+  const Arrow = !active ? ArrowUpDown : sort.dir === 1 ? ArrowUp : ArrowDown
+  return (
+    <TableHead
+      aria-sort={active ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
+      className={`text-muted-foreground h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase ${className ?? ""}`}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className={`hover:text-foreground inline-flex items-center gap-1 uppercase ${active ? "text-foreground" : ""}`}
+      >
+        {label}
+        <Arrow className={`size-3 ${active ? "" : "opacity-40"}`} />
+      </button>
+    </TableHead>
+  )
+}
+
 export function BriefingTable({
   rows,
   prefix,
@@ -42,30 +109,46 @@ export function BriefingTable({
   mark?: string[]
 }) {
   const words = mark ?? []
+  // Last touch, newest first, is the default on every surface that renders
+  // this table: "what just happened" is the question both Today's Review
+  // panel and the Review page open with. Every measured column is a click
+  // away from being the axis instead.
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({
+    key: "touch",
+    dir: -1,
+  })
+  const onSort = (col: SortKey) =>
+    setSort((prev) =>
+      prev.key === col
+        ? { key: col, dir: prev.dir === 1 ? -1 : 1 }
+        : { key: col, dir: DEFAULT_DIR[col] },
+    )
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => compare(a, b, sort.key) * sort.dir),
+    [rows, sort],
+  )
   return (
     <Card className="panel enter overflow-hidden rounded-xl py-0">
       <Table className="text-[12.5px]">
         <TableHeader className="bg-muted/40">
           <TableRow className="hover:bg-transparent">
-            <TableHead className="text-muted-foreground h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
-              Company
-            </TableHead>
+            <SortHead label="Company" col="company" sort={sort} onSort={onSort} />
             <TableHead className="text-muted-foreground h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
               Last message
             </TableHead>
-            <TableHead className="text-muted-foreground h-8 w-40 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
-              Stage
-            </TableHead>
-            <TableHead className="text-muted-foreground h-8 w-36 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
-              Silence
-            </TableHead>
-            <TableHead className="text-muted-foreground h-8 w-24 py-0 text-right font-mono text-[10px] tracking-[0.12em] uppercase">
-              Last touch
-            </TableHead>
+            <SortHead label="Stage" col="stage" sort={sort} onSort={onSort} className="w-40" />
+            <SortHead label="Silence" col="silence" sort={sort} onSort={onSort} className="w-36" />
+            <SortHead
+              label="Last touch"
+              col="touch"
+              sort={sort}
+              onSort={onSort}
+              className="w-24 [&>button]:float-right"
+            />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
+          {sorted.map((row) => (
             <TableRow
               key={`${row.company_id}-${row.application_id}`}
               className="group relative"
