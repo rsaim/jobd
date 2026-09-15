@@ -29,7 +29,9 @@ root (service.py) without touching the graph.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import os
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -54,6 +56,118 @@ FETCH_BATCH = 100
 
 #: Messages classified per service call; same batching contract as v1's CLI.
 CLASSIFY_BATCH = 300
+
+
+def _llm_workers() -> int:
+    """Concurrent extraction calls per batch, for the scrape's classify leg.
+
+    The CLI default stays 1 (`--llm-workers`: rate-limited cheap tiers stall
+    on parallel bursts), but the dashboard scrape defaults to 4: the models
+    this codebase actually configures (OpenRouter paid tier) take a small
+    burst fine, and a backlog batch at one sequential call every ~5s is half
+    an hour of dead air behind a Sync button. JOBD_LLM_WORKERS overrides in
+    either direction.
+    """
+    try:
+        return max(1, int(os.environ.get("JOBD_LLM_WORKERS", "4")))
+    except ValueError:
+        return 4
+
+
+class _LiveMeter:
+    """Progress tee for the scrape's classify leg.
+
+    `classify_pending` reports through the meter protocol; this forwards
+    everything to a real `RunMeter` — so the Runs page gets the same live
+    row a CLI classify writes (items, rate, ETA, spend, and the scraped
+    mail window in ``args``) — and mirrors the phase-2 per-call ticks onto
+    the SSE stream as throttled ``classify_progress`` frames, tokens and
+    cost read live off the provider's own counters.
+
+    Exists because of a live catch: a 2,500-message backlog put ~30 silent
+    minutes between two stream events (phase 2 of the first batch emits
+    nothing), and from the dashboard that was indistinguishable from a hang.
+    """
+
+    #: Seconds between stream frames — matches RunMeter.FLUSH_SECONDS, and
+    #: keeps a multi-hour drain to a few thousand events in the ring buffer.
+    EMIT_SECONDS = 2.0
+
+    def __init__(self, inner: Any, emit: Any, llm: Any, hop: int) -> None:
+        self._inner = inner
+        self._emit = emit
+        self._llm = llm
+        self._hop = hop
+        self._last = 0.0
+        self._ticks: dict[str, Any] = {}
+
+    def bump(self, outcome: str | None = None, n: int = 1) -> None:
+        self._inner.bump(outcome, n)
+
+    def error(self, message: str) -> None:
+        self._inner.error(message)
+
+    def set_total(self, total: int | None) -> None:
+        self._inner.set_total(total)
+
+    def flush(self, force: bool = False) -> None:
+        self._inner.flush(force)
+
+    def finish(self, status: str = "done") -> None:
+        self._inner.finish(status)
+
+    def set_counter(self, key: str, value: Any) -> None:
+        self._inner.set_counter(key, value)
+        self._ticks[key] = value
+        now = time.monotonic()
+        if now - self._last < self.EMIT_SECONDS:
+            return
+        self._last = now
+        llm = self._llm
+        self._emit.emit(
+            "classify_progress",
+            hop=self._hop,
+            llm_done=int(self._ticks.get("llm_done", 0) or 0),
+            llm_total=int(self._ticks.get("llm_total", 0) or 0),
+            llm_calls=int(getattr(llm, "calls", 0) or 0),
+            prompt_tokens=float(getattr(llm, "prompt_tokens", 0) or 0),
+            completion_tokens=float(getattr(llm, "completion_tokens", 0) or 0),
+            cost_usd=round(float(getattr(llm, "cost_usd", 0.0) or 0.0), 4),
+        )
+
+
+def _live_meter(ctx: RunContext, state: ScrapeState) -> _LiveMeter:
+    """One pipeline_run row per classify leg, bridged to the scrape stream.
+
+    ``args`` carries the scraped mail window (``mail_since``/``mail_until``)
+    so the Runs page can say *which dates* a sync covered, not just how wide
+    the window was. Total is the current unclassified count — exactly the
+    backlog this leg will drain, since `classify` loops until nothing is
+    pending, not just over this run's fetches.
+    """
+    from jobd.services.metrics import RunMeter
+
+    window = state["window_days"]
+    until = datetime.now(UTC).date()
+    args: dict[str, Any] = {
+        "source": "scrape",
+        "model": getattr(ctx.llm, "name", "?"),
+        "window_days": window,
+        "mail_until": until.isoformat(),
+    }
+    if window:
+        args["mail_since"] = (until - timedelta(days=window)).isoformat()
+    remaining = ctx.conn.execute(
+        "SELECT count(*) FROM message WHERE classified_at IS NULL"
+    ).fetchone()
+    inner = RunMeter.start(
+        kind="classify",
+        total=int(remaining[0]) if remaining else None,
+        args=args,
+        worker="scrape",
+        providers=[p for p in (ctx.llm, ctx.judge) if p is not None],
+    )
+    return _LiveMeter(inner, ctx.emit, ctx.llm, state["hop"])
 
 
 def _ctx(config: RunnableConfig) -> RunContext:
@@ -220,81 +334,99 @@ def classify(state: ScrapeState, config: RunnableConfig) -> dict[str, Any]:
     counters = dict(state["counters"])
     facts: list[str] = []
     watermark = datetime.now(UTC)
-    while True:
-        result = classify_pending(
-            storage=ctx.storage,
-            llm=ctx.llm,
-            repos=ctx.repos,
-            conn=ctx.conn,
-            limit=CLASSIFY_BATCH,
-            escalation_llm=ctx.judge,
-            triage_llm=getattr(ctx, "triage_llm", None),
-        )
-        if result.seen == 0:
-            break
-        if result.errors and result.seen == len(result.errors):
-            # Every message this pass errored — an erroring message stays
-            # unclassified, so another pass would re-select exactly the same
-            # rows forever. Live-caught: the mailbox's one poison message
-            # (raw bytes unreadable) span a run for 3,500+ iterations before
-            # this break existed. Report and move on; the rows stay visible
-            # to the next run and to `jobd classify`.
-            counters["classify_errors"] = (
-                counters.get("classify_errors", 0) + len(result.errors)
+    meter = _live_meter(ctx, state)
+    status = "done"
+    try:
+        while True:
+            result = classify_pending(
+                storage=ctx.storage,
+                llm=ctx.llm,
+                repos=ctx.repos,
+                conn=ctx.conn,
+                limit=CLASSIFY_BATCH,
+                escalation_llm=ctx.judge,
+                triage_llm=getattr(ctx, "triage_llm", None),
+                llm_workers=_llm_workers(),
+                meter=meter,
             )
-            ctx.emit.emit(
-                "classify_stalled",
-                errors=result.errors[:3],
-                count=len(result.errors),
-            )
-            break
-        for key in (
-            "filtered_out",
-            "triaged_out",
-            "triage_calls",
-            "carried_forward",
-            "llm_calls",
-            "not_job_related",
-            "queued_for_review",
-            "recorded",
-            "companies_created",
-            "applications_created",
-            "stage_events",
-            "rules_learned",
-        ):
-            counters[key] = counters.get(key, 0) + getattr(result, key)
-        counters["prompt_tokens"] = float(getattr(ctx.llm, "prompt_tokens", 0))
-        counters["completion_tokens"] = float(
-            getattr(ctx.llm, "completion_tokens", 0)
-        )
-        counters["cost_usd"] = round(float(getattr(ctx.llm, "cost_usd", 0.0)), 4)
-        counters["classified"] = counters.get("classified", 0) + (
-            result.seen - len(result.errors)
-        )
-        if result.errors:
-            counters["classify_errors"] = (
-                counters.get("classify_errors", 0) + len(result.errors)
-            )
-        ctx.emit.emit(
-            "classify_progress",
-            hop=state["hop"],
-            **{
-                k: counters.get(k, 0)
-                for k in (
-                    "classified",
-                    "recorded",
-                    "filtered_out",
-                    "llm_calls",
-                    "queued_for_review",
+            if result.seen == 0:
+                break
+            if result.errors and result.seen == len(result.errors):
+                # Every message this pass errored — an erroring message stays
+                # unclassified, so another pass would re-select exactly the
+                # same rows forever. Live-caught: the mailbox's one poison
+                # message (raw bytes unreadable) span a run for 3,500+
+                # iterations before this break existed. Report and move on;
+                # the rows stay visible to the next run and to
+                # `jobd classify`.
+                status = "failed"
+                counters["classify_errors"] = (
+                    counters.get("classify_errors", 0) + len(result.errors)
                 )
-            },
-        )
-        for fact in new_company_facts(ctx.conn, watermark) + stage_facts(
-            ctx.conn, watermark
-        ):
-            facts.append(fact)
-            ctx.emit.emit("fact", text=fact, hop=state["hop"])
-        watermark = datetime.now(UTC)
+                ctx.emit.emit(
+                    "classify_stalled",
+                    errors=result.errors[:3],
+                    count=len(result.errors),
+                )
+                break
+            for key in (
+                "filtered_out",
+                "triaged_out",
+                "triage_calls",
+                "carried_forward",
+                "llm_calls",
+                "not_job_related",
+                "queued_for_review",
+                "recorded",
+                "companies_created",
+                "applications_created",
+                "stage_events",
+                "rules_learned",
+            ):
+                counters[key] = counters.get(key, 0) + getattr(result, key)
+            counters["prompt_tokens"] = float(
+                getattr(ctx.llm, "prompt_tokens", 0)
+            )
+            counters["completion_tokens"] = float(
+                getattr(ctx.llm, "completion_tokens", 0)
+            )
+            counters["cost_usd"] = round(
+                float(getattr(ctx.llm, "cost_usd", 0.0)), 4
+            )
+            counters["classified"] = counters.get("classified", 0) + (
+                result.seen - len(result.errors)
+            )
+            if result.errors:
+                counters["classify_errors"] = (
+                    counters.get("classify_errors", 0) + len(result.errors)
+                )
+            ctx.emit.emit(
+                "classify_progress",
+                hop=state["hop"],
+                **{
+                    k: counters.get(k, 0)
+                    for k in (
+                        "classified",
+                        "recorded",
+                        "filtered_out",
+                        "llm_calls",
+                        "queued_for_review",
+                    )
+                },
+            )
+            for fact in new_company_facts(ctx.conn, watermark) + stage_facts(
+                ctx.conn, watermark
+            ):
+                facts.append(fact)
+                ctx.emit.emit("fact", text=fact, hop=state["hop"])
+            watermark = datetime.now(UTC)
+    except BaseException:
+        # GuardAbort (budget/balance) is a BaseException; either way the
+        # pipeline_run row must not stay "running" forever.
+        status = "failed"
+        raise
+    finally:
+        meter.finish(status)
     ctx.emit.emit("counters", **counters)
     return {"counters": counters, "facts": facts}
 

@@ -219,31 +219,39 @@ export function ScrapePage() {
             new senders to search, and a final sweep reads what nothing matched.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Select value={window_} onValueChange={setWindow} disabled={active}>
-            <SelectTrigger size="sm" className="w-[150px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {WINDOWS.map((w) => (
-                <SelectItem key={w.value} value={w.value}>
-                  {w.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button size="sm" onClick={begin} disabled={active || starting}>
-            {active ? (
-              <>
-                <Loader2 className="animate-spin motion-reduce:animate-none" />
-                Running
-              </>
-            ) : (
-              <>
-                <Play /> Start
-              </>
-            )}
-          </Button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <Select value={window_} onValueChange={setWindow} disabled={active}>
+              <SelectTrigger size="sm" className="w-[150px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WINDOWS.map((w) => (
+                  <SelectItem key={w.value} value={w.value}>
+                    {w.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button size="sm" onClick={begin} disabled={active || starting}>
+              {active ? (
+                <>
+                  <Loader2 className="animate-spin motion-reduce:animate-none" />
+                  Running
+                </>
+              ) : (
+                <>
+                  <Play /> Start
+                </>
+              )}
+            </Button>
+          </div>
+          <div className="text-muted-foreground font-mono text-[11px] tabular-nums">
+            mail dated{" "}
+            {active
+              ? windowDates(live.windowDays, live.startedAt)
+              : windowDates(window_ === "full" ? null : Number(window_))}
+          </div>
         </div>
       </header>
 
@@ -303,6 +311,19 @@ function fmtDuration(s: number): string {
   return `${m}m ${String(Math.floor(s % 60)).padStart(2, "0")}s`
 }
 
+/** "Sep 14 → Sep 15" for a trailing window ending at `end` (default: now).
+ *  The window picker only says how wide the net is; this says which mail
+ *  dates it actually covers — the sync is idempotent, so re-running the
+ *  same dates re-checks them without duplicating anything. */
+function windowDates(days: number | null, end?: string | null): string {
+  if (!days) return "full history"
+  const until = end ? new Date(end) : new Date()
+  const since = new Date(until.getTime() - days * 86_400_000)
+  const fmt = (d: Date) =>
+    d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  return `${fmt(since)} → ${fmt(until)}`
+}
+
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
@@ -317,7 +338,13 @@ function MetricsStrip({ live, active }: { live: ScrapeLive; active: boolean }) {
   const tiles: { label: string; value: string; hint?: string }[] = [
     { label: "elapsed", value: fmtDuration(shown) },
     { label: "gmail calls", value: (c.api_calls ?? c.queries_run ?? 0).toLocaleString() },
-    { label: "model calls", value: (c.llm_calls ?? 0).toLocaleString() },
+    {
+      label: "model calls",
+      value: (c.llm_calls ?? 0).toLocaleString(),
+      // In-batch tick from the classify leg — proof of life while a big
+      // unclassified backlog drains without any batch-end event for a while.
+      hint: c.llm_total ? `batch ${c.llm_done ?? 0}/${c.llm_total}` : undefined,
+    },
     {
       label: "tokens",
       value: fmtTokens(tokens),
@@ -605,8 +632,10 @@ function RunHistory({ runs }: { runs: ScrapeRun[] }) {
                 <td className="py-1.5 pr-3 font-mono text-[12px] tabular-nums">
                   {run.started_at?.slice(0, 16).replace("T", " ")}
                 </td>
-                <td className="py-1.5 pr-3">
-                  {run.window_days ? `${run.window_days}d` : "full"}
+                <td className="py-1.5 pr-3 whitespace-nowrap">
+                  {run.window_days
+                    ? `${run.window_days}d · ${windowDates(run.window_days, run.started_at)}`
+                    : "full"}
                 </td>
                 <td className="text-muted-foreground max-w-[26ch] truncate py-1.5 pr-3">
                   {run.accounts.join(", ")}

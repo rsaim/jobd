@@ -45,6 +45,12 @@ services:
       # still hard-capping a runaway run at pocket change; raise it in .env
       # for a full backfill. The CLI's per-run --budget flag still overrides.
       JOBD_RUN_BUDGET: ${JOBD_RUN_BUDGET:-2.00}
+      # Concurrent extraction calls for the dashboard's Sync classify leg.
+      # The CLI default stays 1 (see --llm-workers); the container serves
+      # the Sync button, where a first sync can inherit a mailbox-sized
+      # backlog — 8 turns a multi-hour sequential drain into under an hour
+      # against the OpenRouter paid tier.
+      JOBD_LLM_WORKERS: ${JOBD_LLM_WORKERS:-8}
       # The company-summary card and the chat dock stay off until this is set
       # (a 404, not an error — see api.py's chat_turn). It is separate from
       # JOBD_MODEL on purpose: the extractor runs over the whole mailbox and

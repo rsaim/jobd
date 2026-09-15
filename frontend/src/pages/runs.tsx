@@ -66,6 +66,22 @@ const KIND_LABEL: Record<string, string> = {
   backfill: "Envelope backfill",
 }
 
+/** "mail Sep 14 → Sep 15" when the run recorded which dates it scraped —
+ *  the dashboard sync's classify leg writes mail_since/mail_until into
+ *  args. Re-running the same dates is safe by design (idempotent ingest);
+ *  showing them is what makes that visible. */
+function mailWindow(run: PipelineRun): string | null {
+  const since = run.args?.mail_since as string | undefined
+  const until = run.args?.mail_until as string | undefined
+  if (!until) return null
+  const fmt = (s: string) =>
+    new Date(`${s}T00:00:00`).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    })
+  return since ? `mail ${fmt(since)} → ${fmt(until)}` : `mail through ${fmt(until)}`
+}
+
 function statusTone(run: PipelineRun): string {
   if (run.stalled) return "text-amber-600 dark:text-amber-500"
   if (run.status === "failed") return "text-red-600 dark:text-red-500"
@@ -87,6 +103,9 @@ function ActiveRun({ run }: { run: PipelineRun }) {
             <span className="font-medium">{KIND_LABEL[run.kind] ?? run.kind}</span>
             {run.worker && (
               <span className="text-muted-foreground text-xs">worker {run.worker}</span>
+            )}
+            {mailWindow(run) && (
+              <span className="text-muted-foreground text-xs">· {mailWindow(run)}</span>
             )}
             {phase && (
               <span className="text-muted-foreground text-xs">· {phase}</span>
@@ -214,9 +233,15 @@ export function RunsPage() {
                   >
                     {fmtStarted(run.started_at)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     {KIND_LABEL[run.kind] ?? run.kind}
                     {run.worker ? ` ${run.worker}` : ""}
+                    {mailWindow(run) && (
+                      <span className="text-muted-foreground text-xs">
+                        {" "}
+                        · {mailWindow(run)}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className={statusTone(run)}>{run.status}</TableCell>
                   <TableCell className="text-right tabular-nums">

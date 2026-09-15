@@ -494,11 +494,33 @@ def classify_pending(
                 thread_readings[key] = answer
             return job, answer
 
+    # Phase-2 progress, one tick per finished model call. Phase 1's bumps
+    # are spent and phase 3 hasn't started, so without this the meter goes
+    # silent for the whole batch — a 300-message batch against a sequential
+    # cheap-tier model reads as a half-hour stall on every surface that
+    # watches the run (live-caught from the dashboard's Sync page). The
+    # meter's own flush throttle decides how often a tick reaches disk.
+    meter.set_counter("llm_total", len(jobs))
+    llm_done = 0
+    llm_done_lock = threading.Lock()
+
+    def _ask_counted(job: _Job) -> tuple[_Job, dict[str, Any] | Exception]:
+        nonlocal llm_done
+        out = _ask(job)
+        with llm_done_lock:
+            llm_done += 1
+            done = llm_done
+        # set_counter's own throttle (`_maybe_flush`) decides how often a
+        # tick reaches disk; forcing a flush here would be one UPDATE per
+        # model call.
+        meter.set_counter("llm_done", done)
+        return out
+
     if llm_workers > 1 and len(jobs) > 1:
         with ThreadPoolExecutor(max_workers=llm_workers) as pool:
-            answered = list(pool.map(_ask, jobs))
+            answered = list(pool.map(_ask_counted, jobs))
     else:
-        answered = [_ask(j) for j in jobs]
+        answered = [_ask_counted(j) for j in jobs]
 
     # Phase 3 — apply, sequential: record, teach, escalate, queue. Every write
     # happens here, one message at a time, so the learning policy's in-memory
