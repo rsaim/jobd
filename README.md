@@ -49,21 +49,31 @@ Nobody records this, so nobody can tell you. The record can: a funnel of
 from first contact to an offer, a 26% ghost rate — and the two numbers no
 spreadsheet has ever held.
 
-**~126h in rooms. ~437h prepping.** The second is the invisible half of a
-job search: the DS/algo practice before a technical round, the system
-design and fundamentals sweep before an onsite, the standing weekly grind
-in any month the search was live. Both are **estimates anchored on
-corroborated rounds, not measurements** — a mailbox records that an onsite
-was scheduled, never that you spent eight hours preparing for it. The
-weights are stated in the open (0.5h/screen, 1h/technical, 3h/onsite in
-the room; 0.5/2/4/8h of prep behind them, plus ~2h a week standing), the
-hint text on every tile says which are assumed, and a round only counts
-once the mail corroborates it happened — for a recruiter screen, your own
-sent mail near the date.
+**~126h in rooms. ~437h prepping** — the invisible half of a job search:
+the practice before a technical round, the system-design and fundamentals
+sweep before an onsite, the standing weekly grind in any month the search
+was live. 437 hours that never appeared on anyone's calendar.
 
-Change the weights if yours differ. The point is that the shape of the
-year was sitting in the mailbox the whole time, and that 437 hours of it
-never appeared on any calendar.
+Every figure is derived, never typed in, and every one is auditable — so
+here is exactly how each is computed:
+
+| Metric | How it is computed | Derived or assumed |
+| --- | --- | --- |
+| **Confirmed rounds** | First `stage_event` per application per stage. A recruiter screen only counts if your *own* sent mail lands within −7/+14 days of it — a scheduled call that never happened doesn't count. | Derived |
+| **In rooms** | Confirmed rounds × a per-stage length: 0.5h screen, 1h technical, 3h onsite (a same-day loop, not one meeting). | Assumed weights |
+| **Prepping** | Confirmed rounds × a per-stage prep weight: 0.5h screen, 2h phone, 4h technical, 8h onsite — plus 8h/month for every month holding at least one round (the standing practice no single round can claim). | Assumed weights |
+| **Weeks to an offer** | Median across offers of: your first message to that company → the offer date. | Derived |
+| **Ghost rate** | Of companies you actually engaged, the share whose thread went quiet: last message **outbound**, 21+ days old, not in a terminal stage. Their silence, not yours. | Derived |
+| **Funnel** | Companies → engaged (you wrote) → replied → interviewed (≥1 confirmed round) → offers. Counts distinct companies; rounds are counted separately. | Derived |
+| **Response rate** | Applications that got a reply ÷ applications you reached out to. | Derived |
+
+The hour figures are **estimates anchored on corroborated rounds, not
+measurements**: a mailbox records that an onsite was scheduled, never that
+you spent eight hours preparing for it. The weights live in one place
+([`services/dashboard.py`](src/jobd/services/dashboard.py) —
+`_INTERVIEW_HOURS`, `_PREP_HOURS`, `_PREP_BASELINE_MONTHLY`); change them
+if yours differ and every figure follows. Each dashboard tile carries the
+same disclosure in its hint text.
 
 ## What you get
 
