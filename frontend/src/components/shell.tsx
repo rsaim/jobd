@@ -68,6 +68,7 @@ import {
 import { ChatDock } from "@/components/chat-dock"
 import { CompanyRailPanels } from "@/components/company-rail"
 import { CommandPalette, CommandTrigger } from "@/components/command-palette"
+import { UserMenu } from "@/components/user-menu"
 
 const NAV = [
   {
@@ -338,6 +339,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             >
               {dark ? <Sun /> : <MoonStar />}
             </Button>
+            <UserMenu />
           </div>
         </header>
         <main className="min-w-0 flex-1 px-4 pt-6 pb-24 md:px-8">{children}</main>

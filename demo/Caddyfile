@@ -20,7 +20,10 @@
 
 	@login `{http.request.uri.path} == "/login" && {http.request.uri.query.u} == "demo" && {http.request.uri.query.p} == "demo"`
 	handle @login {
-		header +Set-Cookie "jobd_demo=in; Path=/; Max-Age=2592000; SameSite=Lax; Secure; HttpOnly"
+		# Not HttpOnly on purpose: the dashboard's user menu reads the
+		# cookie to know it is running as the demo, and clears it to sign
+		# out. It guards nothing secret.
+		header +Set-Cookie "jobd_demo=in; Path=/; Max-Age=2592000; SameSite=Lax; Secure"
 		redir * / 302
 	}
 	handle /login {

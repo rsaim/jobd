@@ -485,6 +485,7 @@ def chrome() -> dict[str, Any]:
             "chat_model": load_settings().chat_model,
             "chat_models": _chat_models() if load_settings().chat_model else [],
             "storage_configured": bool(os.environ.get("JOBD_BUCKET")),
+            "account": _self_address(conn),
         }
 
 

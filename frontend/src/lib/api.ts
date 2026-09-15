@@ -479,6 +479,7 @@ export const useChrome = () =>
         chat_model: string | null
         chat_models: string[]
         storage_configured: boolean
+        account: string | null
       }>("/chrome"),
     staleTime: 30_000,
   })
