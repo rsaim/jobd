@@ -167,10 +167,11 @@ direct-addressed mail nothing matched.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/seed-expand-loop-dark.png">
-  <img alt="The seed-and-expand loop: search, fetch, classify, learn, and a sweep of the
-direct-mail residual run clockwise, while classify and learn write distilled
-sender rules into a central hub — so every pass costs less than the one
-before" src="docs/img/seed-expand-loop.png">
+  <img alt="The seed-and-expand loop: mail enters from the Gmail API and the record
+lands in Postgres, while search, fetch, classify, learn and a sweep of the
+direct-mail residual run clockwise. Classify and learn distil model verdicts
+into one shared store of learned sender rules, and a bar chart shows model
+calls falling with every pass" src="docs/img/seed-expand-loop.png">
 </picture>
 
 *`plan` seeds the first search; `report` closes the run once the frontier is
