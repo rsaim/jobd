@@ -18,7 +18,7 @@ the module map is in [AGENTS.md](../AGENTS.md).
 * **Learned-first classification** — no hardcoded rules. The metadata
   prefilter carries only protocol signals (bulk headers, Gmail labels) and
   learned `sender_rule`s; thread/rule carry resolves repeat senders for
-  free; a model (any LiteLLM id, via OpenRouter or local Ollama) reads only
+  free; a model (any LiteLLM id, via OpenRouter) reads only
   the undecided residue.
 * **Online learning** (`src/jobd/domain/learning.py`) — every model verdict
   teaches: a first confident positive protects the sender's domain, a
@@ -41,7 +41,7 @@ the module map is in [AGENTS.md](../AGENTS.md).
 ```bash
 # 1. Infrastructure: Postgres (via docker-compose or your own instance):
 export DATABASE_URL=postgresql://jobd:jobd@localhost:5432/jobd
-export JOBD_LOCAL_STORE=~/.jobd/raw        # local storage (S3 also supported)
+export JOBD_LOCAL_STORE=~/.jobd/raw        # local storage for raw mail
 
 pip install -e .          # add ".[llm]" for model-backed extraction
 jobd migrate up
@@ -107,7 +107,7 @@ src/jobd/
   scrape/       the seed-and-expand graph (LangGraph), queries, events, facts
   services/     classify, ingest, learning, dashboard, timeline, summaries
   domain/       prefilter, extraction schema, entity resolution — pure logic
-  adapters/     gmail, postgres, s3/filesystem storage, LLM providers
+  adapters/     gmail, postgres, filesystem storage, LLM providers
   web/          FastAPI JSON API + the built dashboard client
 frontend/       Vite/React dashboard (Tailwind + shadcn)
 docs/           architecture, schema, experiment series

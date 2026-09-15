@@ -9,8 +9,7 @@ file and the code is a bug — please open an issue.
 
 | Configuration | Leaves your machine | Never leaves |
 |---|---|---|
-| Local store + local LLM (`ollama/<model>`) | **Nothing** beyond the mail providers you already use. | Everything: raw mail, extractions, drafts. |
-| Local store + cloud LLM | Only messages that survive the metadata prefilter, inside the extraction prompt — one call per thread. | The raw mailbox as a whole; everything the prefilter rejected (41% of the reference mailbox never reached a model); your credentials. |
+| Live runs | Only messages that survive the metadata prefilter, inside the extraction prompt — one call per thread. | The raw mailbox as a whole; everything the prefilter rejected (41% of the reference mailbox never reached a model); your credentials. |
 | `jobd demo` | Synthetic messages only. | Any real personal data — none exists in this mode. |
 | Chat dock / summaries (`JOBD_CHAT_MODEL` set) | Any message you ask about — not only prefilter survivors. The panel header names the model reading your mail. | When unset, the routes answer 404: the feature does not exist, there is no toggle to trip. |
 
@@ -27,7 +26,7 @@ click. No agentic path holds a send-capable tool.
 ## 3. Storage
 
 Raw message bytes are stored write-once and content-addressed, in a local
-directory (`JOBD_LOCAL_STORE`) or an S3 bucket you own (`JOBD_BUCKET`).
+directory (`JOBD_LOCAL_STORE`).
 The Postgres record is derived and rebuildable from raw (`jobd rebuild`).
 Nothing is ever sent to any service operated by this project — there is no
 such service.

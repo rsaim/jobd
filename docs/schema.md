@@ -4,10 +4,10 @@ Two layers, and it matters which is which.
 
 | Layer | Where | Status |
 |---|---|---|
-| Raw messages | S3 (or filesystem), content-hash keyed JSONL | **Source of truth.** Immutable. Cannot be rebuilt |
+| Raw messages | Filesystem, content-hash keyed JSONL | **Source of truth.** Immutable. Cannot be rebuilt |
 | The record | Postgres | **Derived.** Rebuildable from raw by `jobd rebuild` (I3) |
 
-Lose Postgres and you lose time. Lose the bucket and you lose the project.
+Lose Postgres and you lose time. Lose the raw store and you lose the project.
 
 ---
 
@@ -17,7 +17,7 @@ Lose Postgres and you lose time. Lose the bucket and you lose the project.
 raw/<source>/<ab>/<sha256>.jsonl
 ```
 
-- `raw/` — S3 lifecycle rules (when a bucket is configured) target this prefix; change it and future objects silently opt out of the STANDARD_IA transition.
+- `raw/` — the fixed root prefix for every raw envelope.
 - `<source>` — `gmail`, `linkedin` (companion-extension push — the extension client lives outside this repo), `linkedin-archive`, …
 - `<ab>` — first two hex chars of the hash. Keep any one listing prefix small; `jobd rebuild` walk these.
 - `<sha256>.jsonl` — one JSON object, one line. Single-line files concatenate into a valid JSONL stream, so bulk re-derive is cheap.
@@ -50,7 +50,7 @@ this with two subprocesses at different `PYTHONHASHSEED`.
 ### Write-once
 
 `put()` check `exists()` first and skip. Re-fetch produce an envelope whose
-`fetched_at` differ, so overwrite would mean a **new S3 version of every object
+`fetched_at` differ, so overwrite would mean **every object rewritten
 on every run** — a cost, and a false claim something changed. First write win.
 `fetched_at` therefore record first retrieval, not latest.
 

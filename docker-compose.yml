@@ -5,7 +5,7 @@
 #   docker compose exec app jobd demo          # synthetic mailbox, no creds
 #   open http://localhost:8100
 #
-# The demo needs no API keys, no Gmail and no S3. For a real mailbox, see
+# The demo needs no API keys and no Gmail. For a real mailbox, see
 # AGENTS.md — the same containers take Gmail OAuth credentials and (only if
 # you want model-based extraction) an OpenRouter key via the environment.
 

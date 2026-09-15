@@ -134,15 +134,9 @@ it says so rather than pretending.
 ## 6. Ingest
 
 ```bash
-export JOBD_BUCKET=<your-s3-bucket>   # optional; filesystem store is the default
+export JOBD_LOCAL_STORE=~/jobd-raw    # where raw mail lands, write-once
 jobd migrate up
 jobd ingest gmail --account you@gmail.com
-```
-
-Filesystem archive instead of S3 (no bucket needed):
-
-```bash
-jobd ingest gmail --account you@gmail.com --local-store ~/jobd-raw
 ```
 
 Start small on a five-year mailbox:
@@ -185,11 +179,11 @@ Third run resume from the stored cursor. `api calls` collapse from
 | `That URL is from a different consent attempt` | Pasted an older URL from the scrollback | Use the URL this run printed |
 | `Refresh failed … grant was probably revoked` | 7-day test-mode expiry, or you revoked it | `jobd auth gmail` again |
 | `Gmail no longer has history from …` | Away longer than Gmail keeps history (~1 week) | `jobd ingest gmail --account … --full`. Duplicates nothing |
-| `No raw storage configured` | Neither `--bucket`/`JOBD_BUCKET` nor `--local-store` | Set one. Raw must land durably before anything derive from it (I3) |
+| `No raw storage configured` | `--local-store`/`JOBD_LOCAL_STORE` unset | Set it. Raw must land durably before anything derive from it (I3) |
 
 ## What leaves your machine
 
-Your mail goes to your S3 bucket and nowhere else. Gmail already have it. No
+Raw mail lands on your own disk and nowhere else. Gmail already have it. No
 jobd server exists. See SECURITY.md §1.
 
 M4 does not call an LLM at all — it moves bytes. The cloud-LLM disclosure begin

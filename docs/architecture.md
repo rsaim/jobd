@@ -11,7 +11,7 @@ can be thrown away and rebuilt (I3).
 flowchart TB
     subgraph outside["Outside world"]
         gmail[Gmail API]
-        s3[(Storage · raw envelopes<br/>local filesystem or S3)]
+        raw[(Storage · raw envelopes<br/>local filesystem)]
         pg[(Postgres · derived)]
         model[LLM · local or cloud]
         keyring[OS keyring]
@@ -19,10 +19,9 @@ flowchart TB
 
     subgraph adapters["Adapters — replaceable"]
         gsrc[gmail.GmailSource]
-        s3a[S3Storage]
         fsa[FilesystemStorage]
         repos[postgres.repositories]
-        llm[llm.RuleBased / Ollama / LiteLLM]
+        llm[llm.RuleBased / LiteLLM]
         secrets[TokenStore]
     end
 
@@ -53,8 +52,7 @@ flowchart TB
     gmail --> gsrc --> p1 --> ingest
     secrets <--> keyring
     gsrc -.reads token.-> secrets
-    ingest --> p2 --> s3a --> s3
-    p2 --> fsa
+    ingest --> p2 --> fsa --> raw
     ingest --> repos --> pg
     classify --> p3 --> llm --> model
     classify --> repos
@@ -86,7 +84,7 @@ sequenceDiagram
     autonumber
     participant G as Gmail
     participant I as ingest_account
-    participant S as Storage (local or S3)
+    participant S as Storage (local disk)
     participant P as Postgres
     participant C as classify_pending
     participant M as LLMProvider
@@ -122,7 +120,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    storage[(raw envelopes<br/>immutable, versioned<br/>local or S3)] -->|derive| pg[(Postgres)]
+    storage[(raw envelopes<br/>immutable, write-once<br/>local disk)] -->|derive| pg[(Postgres)]
     pg -->|"jobd rebuild"| drop[TRUNCATE derived tables]
     drop --> storage
 

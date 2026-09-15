@@ -10,7 +10,7 @@ jobd is a local-first job-search CRM built from your own mailbox. It
 ingests mail (Gmail API, or a synthetic demo mailbox), classifies every
 message with a free deterministic tier first (sender rules → metadata
 prefilter → thread carry), sends only the residue to an
-LLM (via OpenRouter/LiteLLM, or local Ollama), and compiles the LLM's judgments
+LLM (via OpenRouter/LiteLLM), and compiles the LLM's judgments
 back into transparent, human-editable sender rules so tomorrow's run pays
 less than today's. A FastAPI server renders the record: companies,
 applications, stages, offers, rejections, a review queue, and live run
@@ -80,7 +80,6 @@ jobd review sweep          # judge model clears what classification punted on
 Raw mail is stored write-once and content-addressed. Set ONE of:
 
 - `JOBD_LOCAL_STORE=/path/to/raw` — filesystem store (local-first default).
-- `JOBD_BUCKET=<s3-bucket>` — S3 store (optional; needs AWS credentials).
 
 ## LLM extraction (optional)
 
@@ -196,7 +195,7 @@ while losing on company naming. When the demo dataset changes, update
 | `src/jobd/cli/main.py` | every CLI command (`jobd --help`) |
 | `src/jobd/services/` | classify, ingest, distill, demo, metrics, dashboard |
 | `src/jobd/domain/` | extraction schemas/prompts, prefilter, envelope parsing |
-| `src/jobd/adapters/` | gmail, postgres, s3/filesystem storage, LLM providers |
+| `src/jobd/adapters/` | gmail, postgres, filesystem storage, LLM providers |
 | `src/jobd/scrape/` | the LangGraph seed-and-expand scrape engine |
 | `src/jobd/web/` | FastAPI app + built frontend (`static/`) |
 | `src/jobd/migrations/` | numbered SQL migrations (`jobd migrate up`) |
