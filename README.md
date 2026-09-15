@@ -18,6 +18,7 @@ service, no hardcoded sender lists.
 </p>
 
 <p align="center">
+  <a href="#what-a-job-search-actually-cost-you">What it cost you</a> ·
   <a href="#what-you-get">What you get</a> ·
   <a href="#quickstart--no-credentials">Quickstart</a> ·
   <a href="#the-problem-measured">The numbers</a> ·
@@ -29,15 +30,40 @@ service, no hardcoded sender lists.
 ---
 
 **Finds 97% of the job-related mail in a Gmail account by fetching 20% of
-it. 100% at 29%.** An agent that learns which senders to ask about next,
-and pays the model less every run: every confident verdict distills into a
-standing rule, so tomorrow's pass asks an LLM about mail today's already
-settled. Spreadsheet trackers ask you to type the record in by hand;
-inbox-sync tools download the mailbox wholesale. jobd does neither.
+it. 100% at 29%.** A self-improving agent: it learns which senders to ask
+about next, and every confident verdict distills into a standing rule, so
+tomorrow's pass asks an LLM about mail today's already settled — cheaper
+each run, and more accurate, because a learned sender is one the cheap
+tiers can no longer wrongly drop. Spreadsheet trackers ask you to type the
+record in by hand; inbox-sync tools download the mailbox wholesale. jobd
+does neither.
 
 ![The Today dashboard on the demo corpus: a company funnel, an interview-day
 heatmap, estimated prep and in-room hours, and median weeks to an offer —
 every figure derived from the mail itself](docs/img/today-demo.png)
+
+## What a job search actually cost you
+
+Nobody records this, so nobody can tell you. The record can: a funnel of
+429 companies down to 8 offers, 150 confirmed interview rounds, 11.2 weeks
+from first contact to an offer, a 26% ghost rate — and the two numbers no
+spreadsheet has ever held.
+
+**~126h in rooms. ~437h prepping.** The second is the invisible half of a
+job search: the DS/algo practice before a technical round, the system
+design and fundamentals sweep before an onsite, the standing weekly grind
+in any month the search was live. Both are **estimates anchored on
+corroborated rounds, not measurements** — a mailbox records that an onsite
+was scheduled, never that you spent eight hours preparing for it. The
+weights are stated in the open (0.5h/screen, 1h/technical, 3h/onsite in
+the room; 0.5/2/4/8h of prep behind them, plus ~2h a week standing), the
+hint text on every tile says which are assumed, and a round only counts
+once the mail corroborates it happened — for a recruiter screen, your own
+sent mail near the date.
+
+Change the weights if yours differ. The point is that the shape of the
+year was sitting in the mailbox the whole time, and that 437 hours of it
+never appeared on any calendar.
 
 ## What you get
 
