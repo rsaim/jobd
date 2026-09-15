@@ -146,6 +146,12 @@
   if (new URLSearchParams(location.search).has("denied")) {
     document.getElementById("denied").style.display = "block";
   }
+  // The dashboard follows the system theme when nothing is stored; the
+  // demo should land dark like this page. Same origin, so seeding the
+  // app's own theme key works — and a visitor's later toggle still wins.
+  try {
+    if (!localStorage.getItem("jobd-theme")) localStorage.setItem("jobd-theme", "dark");
+  } catch (e) {}
 </script>
 </body>
 </html>
