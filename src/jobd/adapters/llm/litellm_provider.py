@@ -111,6 +111,10 @@ class LiteLLMProvider:
         # in either direction.
         self._max_tokens = max_tokens
         self._num_retries = num_retries
+        # One httpx client per worker thread — see `_client`.
+        import threading
+
+        self._local = threading.local()
         #: OpenRouter reasoning mode ("low"/"medium"/"high"), off when None.
         #: Spent where a structural judgment measurably needs it (the app
         #: audit's merge decisions) — not on bulk extraction, where thinking
@@ -136,6 +140,28 @@ class LiteLLMProvider:
                 "`--model ollama/llama3.1`, which needs no extra."
             ) from exc
         return litellm
+
+    def _client(self) -> Any:
+        """One httpx client per thread, passed to every paid completion.
+
+        LiteLLM's default is one module-level httpx client shared by every
+        thread in the process. Its connection pool's bookkeeping lock is a
+        plain non-reentrant `threading.Lock` with no timeout, and once any
+        worker leaks it the whole process's LLM calls queue forever behind
+        the orphan — live-caught: an 8-way audit pool deadlocked with all
+        eight workers parked in `ThreadLock.__enter__` and *no thread alive
+        holding the lock*, after ~30 worker pools had cycled through the
+        shared client in one dashboard sync. Thread-local clients keep
+        keep-alive reuse within a thread and cap the blast radius of any
+        pool failure at that one thread.
+        """
+        client = getattr(self._local, "client", None)
+        if client is None:
+            from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+            client = HTTPHandler(timeout=self._timeout)
+            self._local.client = client
+        return client
 
     def extract(
         self, prompt: str, schema: dict[str, Any], *, text: str
@@ -166,6 +192,7 @@ class LiteLLMProvider:
             },
             temperature=0,
             timeout=self._timeout,
+            client=self._client(),
             # Cheap gateway-routed models (OpenRouter's low-cost tiers
             # especially) rate-limit and gateway-timeout under sequential
             # load routinely — not exceptional, expected. This used to
