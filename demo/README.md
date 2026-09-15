@@ -13,17 +13,18 @@ wiped by the reset.
 
 | File | Role |
 |---|---|
-| `Caddyfile` | TLS, the landing page at `/`, basic auth (`demo` / `demo`) in front of everything else. `/login` exists only to trigger the auth prompt and bounce back to `/`. |
+| `Caddyfile` | TLS, and a cookie gate: without the cookie every path serves the landing page; `GET /login?u=demo&p=demo` sets the cookie and redirects into the app. No browser auth popup anywhere. |
 | `docker-compose.demo.yml` | Overlay on the root compose file: adds Caddy, unpublishes every other port, keeps cert storage in external volumes the reset cannot delete. |
-| `landing/index.html` | The public landing page with the "log in as the demo user" button. |
+| `landing/index.html` | The public landing page: a login form prefilled with the demo credentials, styled with the dashboard's own design tokens. |
 | `oracle-provision.sh` | Creates the whole Oracle side from your laptop — VCN, firewall, instance with capacity retry — and lets cloud-init run `bootstrap.sh` on first boot. |
 | `bootstrap.sh` | One-time VM setup: Docker, the OS firewall, the hostname, first build and seed. |
 | `demo-restart.sh` | The reset: `down -v`, up, migrate, reseed. `--build` makes it a deploy. Refuses to run on any host `bootstrap.sh` has not stamped with `/etc/jobd-demo-host` — on a dev machine `down -v` would wipe the real database, raw store, and Gmail tokens. |
 | `cron` | The nightly schedule (04:10 UTC), installed with `crontab demo/cron`. |
 
-The basic auth is a speed bump for crawlers and scanners, not a secret —
-the credentials are printed on the landing page and the bcrypt hash in the
-Caddyfile is of the string `demo`.
+The gate is a speed bump for crawlers and scanners, not a secret — the
+credentials are public, prefilled in the form, and checked by Caddy
+itself, which answers a correct `/login` with a long-lived cookie. One
+click logs a visitor in.
 
 ## Runbook A: from the CLI (recommended)
 
@@ -72,8 +73,8 @@ everything is looked up by name before being created.
    ```bash
    crontab demo/cron        # edit the path inside first if not ~/jobd
    ```
-5. **Verify.** Open `https://<domain>` — landing page, button, auth prompt
-   (`demo` / `demo`), the Today dashboard. The OS firewall step already
+5. **Verify.** Open `https://<domain>` — the landing form, one click on
+   the prefilled login, the Today dashboard. The OS firewall step already
    happened in bootstrap (Oracle's Ubuntu images reject 80/443 at the host
    even after the security list allows them — the classic trap).
 
