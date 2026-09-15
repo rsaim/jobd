@@ -51,6 +51,12 @@ services:
       # backlog — 8 turns a multi-hour sequential drain into under an hour
       # against the OpenRouter paid tier.
       JOBD_LLM_WORKERS: ${JOBD_LLM_WORKERS:-8}
+      # Second-opinion model for classify-time escalation and the review
+      # sweep. Unset (the default), ambiguous verdicts pile up in the review
+      # queue with nothing to drain them but a human — set it and the punts
+      # get a stronger head inline, so triage stays at spot-check size.
+      # Opt-in on purpose: it spends money the extractor was chosen to save.
+      JOBD_JUDGE_MODEL: ${JOBD_JUDGE_MODEL:-}
       # The company-summary card and the chat dock stay off until this is set
       # (a 404, not an error — see api.py's chat_turn). It is separate from
       # JOBD_MODEL on purpose: the extractor runs over the whole mailbox and
