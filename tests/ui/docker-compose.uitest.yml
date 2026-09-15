@@ -1,0 +1,50 @@
+# A throwaway demo stack for the UI tests.
+#
+# Deliberately NOT the root compose project: the developer's own stack holds a
+# real mailbox, and these tests navigate every page, resize viewports and click
+# things. They need a corpus that is synthetic, deterministic and disposable —
+# and they must never be able to touch the real one.
+#
+# Distinct project name (-p jobd-uitest), distinct ports, distinct volumes.
+# Bring it up with tests/ui/stack.sh up, tear it down with stack.sh down.
+
+name: jobd-uitest
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: jobd
+      POSTGRES_PASSWORD: jobd
+      POSTGRES_DB: jobd
+    # No host port at all: only the app container talks to it. One less way
+    # for a stray psql to hit the wrong database.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobd"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    tmpfs:
+      # The whole point is disposability — the corpus is re-seeded on every
+      # `stack.sh up`, so the data never needs to outlive the container.
+      - /var/lib/postgresql/data
+
+  app:
+    build:
+      context: ../..
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://jobd:jobd@db:5432/jobd
+      JOBD_LOCAL_STORE: /data/raw
+      # No OPENROUTER_API_KEY and no JOBD_CHAT_MODEL on purpose: the tests must
+      # never make a paid call, and the chat dock's "not configured" branch is
+      # itself a state worth rendering on a phone.
+    ports:
+      - "8111:8100"
+    volumes:
+      - uitest-raw:/data/raw
+
+volumes:
+  uitest-raw:

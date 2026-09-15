@@ -131,7 +131,7 @@ function PromptRow({ id, label, text }: { id: string; label: string; text: strin
       <Button
         size="icon"
         variant="ghost"
-        className="text-muted-foreground hover:text-destructive size-7 shrink-0"
+        className="text-muted-foreground hover:text-destructive size-9 shrink-0 sm:size-7"
         disabled={del.isPending}
         onClick={() => del.mutate(id, { onError: (e) => toast.error((e as Error).message) })}
         aria-label={`Delete ${label}`}

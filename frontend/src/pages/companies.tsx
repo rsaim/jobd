@@ -102,10 +102,13 @@ export function CompaniesPage() {
       )}
 
       {/* The filter bar sticks: with 577 rows the controls are otherwise a
-          scroll back to the top away, and this page is used by narrowing. */}
-      <Card className="panel bg-card/85 sticky top-14 z-[5] mt-6 rounded-xl py-3 backdrop-blur-md">
+          scroll back to the top away, and this page is used by narrowing.
+          Not on a phone, though — stacked, these controls run ~230px tall,
+          and pinning a third of the viewport costs more than the scroll it
+          saves. */}
+      <Card className="panel bg-card/85 z-[5] mt-6 rounded-xl py-3 backdrop-blur-md sm:sticky sm:top-14">
         <CardContent className="flex flex-wrap items-center gap-2 px-3">
-          <InputGroup className="h-9 w-64">
+          <InputGroup className="h-9 w-full sm:w-64">
             <InputGroupAddon>
               <Search className="size-3.5" />
             </InputGroupAddon>
@@ -119,7 +122,7 @@ export function CompaniesPage() {
             />
           </InputGroup>
           <Select value={kind || ANY} onValueChange={(value) => set("kind", value)}>
-            <SelectTrigger className="w-36" aria-label="Kind">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-36" aria-label="Kind">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -129,7 +132,7 @@ export function CompaniesPage() {
             </SelectContent>
           </Select>
           <Select value={turn || ANY} onValueChange={(value) => set("turn", value)}>
-            <SelectTrigger className="w-40" aria-label="Turn">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-40" aria-label="Turn">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -139,7 +142,7 @@ export function CompaniesPage() {
             </SelectContent>
           </Select>
           <Select value={active || ANY} onValueChange={(value) => set("active", value)}>
-            <SelectTrigger className="w-40" aria-label="Active within">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-40" aria-label="Active within">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -150,7 +153,7 @@ export function CompaniesPage() {
             </SelectContent>
           </Select>
           <Select value={sort} onValueChange={(value) => set("sort", value)}>
-            <SelectTrigger className="w-44" aria-label="Sort">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-44" aria-label="Sort">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -199,15 +202,19 @@ export function CompaniesPage() {
         </EmptyState>
       ) : (
         <Card className="panel enter mt-4 overflow-hidden rounded-xl py-0">
-          <Table>
+          {/* table-fixed makes the percentage widths below authoritative:
+              with auto layout the longest company name sets the column width,
+              the table overflows its scroller, and every name truncates to a
+              few pixels while Status keeps its full width. */}
+          <Table className="table-fixed">
             <TableHeader className="bg-muted/40">
               <TableRow>
                 <TableHead>Company</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Turn</TableHead>
-                <TableHead className="text-right">Apps</TableHead>
-                <TableHead className="text-right">Messages</TableHead>
-                <TableHead className="text-right">Last touch</TableHead>
+                <TableHead className="w-[22%]">Status</TableHead>
+                <TableHead className="hidden w-[14%] sm:table-cell">Turn</TableHead>
+                <TableHead className="hidden w-[9%] text-right sm:table-cell">Apps</TableHead>
+                <TableHead className="hidden w-[10%] text-right md:table-cell">Messages</TableHead>
+                <TableHead className="hidden w-[15%] text-right sm:table-cell">Last touch</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -217,10 +224,10 @@ export function CompaniesPage() {
                       of its own: it is how you recognise the company, not a
                       value anyone compares down the page, and the column it
                       used to occupy pushed Last touch off the card. */}
-                  <TableCell className="font-medium">
-                    <span className="flex items-center gap-2.5">
+                  <TableCell className="w-[45%] max-w-0 font-medium">
+                    <span className="flex min-w-0 items-center gap-2.5">
                       <CompanyMark id={row.id} name={row.canonical_name} size="md" />
-                      <span className="grid min-w-0">
+                      <span className="grid min-w-0 flex-1">
                         <span className="flex min-w-0 items-center gap-2">
                           <Link
                             to={`/company/${row.id}`}
@@ -233,20 +240,32 @@ export function CompaniesPage() {
                         <span className="text-muted-foreground truncate font-mono text-[11px] font-normal">
                           {row.domain || "no domain"}
                         </span>
+                        {/* Turn and Last touch are their own columns from sm
+                            up; on a phone they ride here instead of being
+                            dropped — whose move it is, is why you opened
+                            this page. */}
+                        <span className="mt-1 flex items-center gap-2 sm:hidden">
+                          <TurnBadge turn={row.turn} />
+                          <span className="tabular text-muted-foreground font-mono text-[10.5px]">
+                            {fmtIso(row.last_touch)}
+                          </span>
+                        </span>
                       </span>
                     </span>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="overflow-hidden">
                     <StageBadge stage={row.latest_stage} />
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="hidden sm:table-cell">
                     <TurnBadge turn={row.turn} />
                   </TableCell>
-                  <TableCell className="tabular text-right whitespace-nowrap">
+                  <TableCell className="tabular hidden text-right whitespace-nowrap sm:table-cell">
                     {row.application_count}
                   </TableCell>
-                  <TableCell className="tabular text-right">{row.message_count}</TableCell>
-                  <TableCell className="tabular text-muted-foreground text-right whitespace-nowrap">
+                  <TableCell className="tabular hidden text-right md:table-cell">
+                    {row.message_count}
+                  </TableCell>
+                  <TableCell className="tabular text-muted-foreground hidden text-right whitespace-nowrap sm:table-cell">
                     {fmtIso(row.last_touch)}
                   </TableCell>
                 </TableRow>

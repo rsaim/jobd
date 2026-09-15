@@ -64,6 +64,7 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { ChatDock } from "@/components/chat-dock"
 import { CompanyRailPanels } from "@/components/company-rail"
@@ -175,6 +176,24 @@ const NAV = [
 
 const FLAT = NAV.flatMap((section) => section.items)
 
+/**
+ * Close the mobile rail whenever the route changes.
+ *
+ * On a phone the rail is a sheet drawn over the page. Radix keeps it open
+ * until something closes it, and a react-router <Link> changes the URL without
+ * unmounting anything — so tapping a nav item used to render the destination
+ * *underneath* the still-open sheet, which reads as the tap having done
+ * nothing. Lives inside the provider because that is where useSidebar works.
+ */
+function CloseRailOnNavigate() {
+  const { pathname } = useLocation()
+  const { isMobile, setOpenMobile } = useSidebar()
+  useEffect(() => {
+    if (isMobile) setOpenMobile(false)
+  }, [pathname, isMobile, setOpenMobile])
+  return null
+}
+
 function useTheme() {
   const [dark, setDark] = useState(() =>
     document.documentElement.classList.contains("dark"),
@@ -211,6 +230,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider>
+      <CloseRailOnNavigate />
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
@@ -318,14 +338,21 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className="paper min-w-0">
-        <header className="bg-background/70 supports-[backdrop-filter]:bg-background/55 sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b px-4 backdrop-blur-md">
-          <SidebarTrigger className="-ml-1" />
+        <header className="bg-background/70 supports-[backdrop-filter]:bg-background/55 sticky top-0 z-10 flex h-14 shrink-0 items-center gap-1.5 border-b px-2 backdrop-blur-md sm:gap-2 sm:px-4">
+          {/* shadcn ships this at size-7 (28px). On a phone it is the only
+              way into the navigation, so it gets a thumb-sized target. */}
+          <SidebarTrigger className="-ml-1 size-9 sm:size-7" />
           <Separator orientation="vertical" className="mr-1 !h-4" />
-          <span className="flex items-center gap-2 text-sm font-medium">
-            {current?.icon && <current.icon className="text-muted-foreground size-4" />}
-            {current?.label ?? "jobd"}
+          <span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            {current?.icon && (
+              <current.icon className="text-muted-foreground size-4 shrink-0" />
+            )}
+            <span className="truncate">{current?.label ?? "jobd"}</span>
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          {/* min-w-0 so the range picker inside can actually truncate: a flex
+              child defaults to min-width:auto and refuses to shrink below its
+              content, which is what pushes this row past a phone's width. */}
+          <div className="ml-auto flex min-w-0 items-center gap-2">
             {/* Left of search, because it scopes what search runs against. */}
             <RangePicker />
             <div className="hidden sm:block">
@@ -342,7 +369,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <UserMenu />
           </div>
         </header>
-        <main className="min-w-0 flex-1 px-4 pt-6 pb-24 md:px-8">{children}</main>
+        <main className="min-w-0 flex-1 px-3 pt-6 pb-24 sm:px-4 md:px-8">{children}</main>
       </SidebarInset>
 
       {/* Chat is a floating dock (chat-dock.tsx), not a column: the fixed

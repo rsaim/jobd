@@ -85,8 +85,8 @@ function SearchPulse({ initial }: { initial: ActivityCalendar }) {
   const calendar = metric === "interviews" ? initial : fetched.data
   return (
     <div className="flex h-full flex-col justify-center gap-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-muted-foreground flex items-center gap-1.5 font-mono text-[10px] tracking-[0.16em] uppercase">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+        <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.16em] uppercase">
           <CalendarRange className="size-3" /> Activity
         </span>
         <Button
@@ -103,7 +103,7 @@ function SearchPulse({ initial }: { initial: ActivityCalendar }) {
           value={metric}
           onValueChange={(value) => setMetric(value as ActivityMetric)}
         >
-          <SelectTrigger size="sm" className="h-7 w-auto text-[11.5px]">
+          <SelectTrigger size="sm" className="h-7 w-auto min-w-0 max-w-[8.5rem] text-[11.5px] sm:max-w-none">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -163,7 +163,10 @@ function FunnelStrip({ stats }: { stats: Stats }) {
     },
   ]
   return (
-    <Card className="panel grid grid-cols-5 gap-0 rounded-xl px-1 py-3">
+    // Five funnel stages across 375px leaves ~67px each, which truncates
+    // "Interviewed" to "Interv…" and squeezes the conversion gauge to nothing.
+    // Two per row on a phone, the full strip from lg up.
+    <Card className="panel grid grid-cols-2 gap-y-4 rounded-xl px-1 py-3 sm:grid-cols-3 lg:grid-cols-5 lg:gap-y-0">
       {stages.map((stage, i) => {
         const prev = i > 0 ? stages[i - 1].n : 0
         const conv = prev > 0 ? stage.n / prev : null
@@ -172,7 +175,16 @@ function FunnelStrip({ stats }: { stats: Stats }) {
           <div
             key={stage.label}
             title={stage.hint}
-            className={`px-3 ${i > 0 ? "border-border/60 border-l" : ""}`}
+            // The divider follows the grid, not the index: a plain `i > 0`
+            // rule draws a leading border on whichever item happens to start
+            // a wrapped row. Each breakpoint skips its own first column, so
+            // the rule is written per-breakpoint rather than from `i`.
+            className={[
+              "border-border/60 px-3",
+              "[&:not(:nth-child(2n+1))]:border-l",
+              "sm:[&:nth-child(2n+1)]:border-l sm:[&:nth-child(3n+1)]:border-l-0",
+              "lg:[&:nth-child(3n+1)]:border-l lg:[&:first-child]:border-l-0",
+            ].join(" ")}
           >
             <p className="text-muted-foreground truncate font-mono text-[9.5px] tracking-[0.12em] uppercase">
               {stage.label}
@@ -391,7 +403,7 @@ export function HomePage() {
           this page came from one payload — so it answers on the keystroke
           and never asks the server anything. It sits under the header rather
           than in it because it belongs to the lists, not to the app. */}
-      <Card className="panel bg-card/85 sticky top-14 z-[5] mt-4 rounded-xl py-2.5 backdrop-blur-md">
+      <Card className="panel bg-card/85 z-[5] mt-4 rounded-xl py-2.5 backdrop-blur-md sm:sticky sm:top-14">
         <CardContent className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3">
           <InputGroup className="h-9 min-w-64 flex-1">
             <InputGroupAddon>

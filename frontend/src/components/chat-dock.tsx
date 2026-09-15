@@ -93,15 +93,19 @@ export function ChatDock({
   }, [open, setAndRemember])
 
   return (
-    <div className="fixed right-4 bottom-0 z-40 max-sm:right-2">
+    <div className="fixed right-4 bottom-0 z-40 max-sm:right-3">
       {/* Collapsed launcher — LinkedIn's docked "Messaging" bar. */}
       <button
         type="button"
         aria-expanded={open}
         aria-controls="chat-dock-window"
+        aria-label="Ask jobd"
         onClick={() => setAndRemember(true)}
         className={
-          "bg-sidebar hover:bg-accent border-border/80 flex w-72 cursor-pointer items-center gap-2.5 rounded-t-xl border border-b-0 px-3 py-2.5 shadow-[0_-2px_16px_-4px_rgb(0_0_0/0.15)] transition-[opacity,transform] motion-reduce:transition-none " +
+          // A 288px bar across a 375px screen is most of the width sitting on
+          // top of the list you are reading. On a phone the launcher shrinks
+          // to a pill in the corner; from sm up it is the full docked bar.
+          "bg-sidebar hover:bg-accent border-border/80 flex w-auto cursor-pointer items-center gap-2.5 rounded-t-xl border border-b-0 px-3 py-2.5 shadow-[0_-2px_16px_-4px_rgb(0_0_0/0.15)] transition-[opacity,transform] motion-reduce:transition-none sm:w-72 " +
           (open ? "pointer-events-none translate-y-2 opacity-0" : "translate-y-0 opacity-100")
         }
       >
@@ -111,8 +115,8 @@ export function ChatDock({
         >
           <Sparkles className="size-3.5" />
         </span>
-        <span className="text-sm font-semibold">Ask jobd</span>
-        <ChevronUp className="text-muted-foreground ml-auto size-4" />
+        <span className="hidden text-sm font-semibold sm:inline">Ask jobd</span>
+        <ChevronUp className="text-muted-foreground size-4 sm:ml-auto" />
       </button>
 
       {/* Expanded window — grows upward from the same corner. Kept mounted
@@ -120,7 +124,7 @@ export function ChatDock({
       <div
         id="chat-dock-window"
         className={
-          "bg-sidebar border-border/80 absolute right-0 bottom-0 flex h-[min(37.5rem,calc(100svh-4.5rem))] w-[min(24rem,calc(100vw-1rem))] origin-bottom-right flex-col overflow-hidden rounded-t-xl border border-b-0 shadow-2xl transition-[opacity,transform] motion-reduce:transition-none " +
+          "bg-sidebar border-border/80 absolute right-0 bottom-0 flex h-[min(37.5rem,calc(100svh-4.5rem))] w-[min(24rem,calc(100%-1rem))] max-sm:fixed max-sm:right-3 max-sm:left-3 max-sm:w-auto origin-bottom-right flex-col overflow-hidden rounded-t-xl border border-b-0 shadow-2xl transition-[opacity,transform] motion-reduce:transition-none " +
           (open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none invisible translate-y-3 scale-[0.98] opacity-0")

@@ -1,0 +1,19 @@
+{
+  "name": "jobd-ui-tests",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "phone": "playwright test --project=phone",
+    "report": "playwright show-report"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "private": "true",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

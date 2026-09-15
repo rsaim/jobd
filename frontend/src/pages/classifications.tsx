@@ -80,7 +80,7 @@ export function ClassificationsPage() {
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <button
           onClick={() => setLabel(null)}
-          className={`rounded px-2 py-1 ${label === null ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+          className={`min-h-8 rounded px-2.5 py-1.5 sm:min-h-0 sm:px-2 sm:py-1 ${label === null ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
         >
           All {total.toLocaleString()}
         </button>
@@ -88,7 +88,7 @@ export function ClassificationsPage() {
           <button
             key={l}
             onClick={() => setLabel(l === label ? null : l)}
-            className={`rounded px-2 py-1 tabular-nums ${label === l ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            className={`min-h-8 rounded px-2.5 py-1.5 tabular-nums sm:min-h-0 sm:px-2 sm:py-1 ${label === l ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
           >
             {l} {(data.counts[l] ?? 0).toLocaleString()}
           </button>
@@ -101,16 +101,19 @@ export function ClassificationsPage() {
           here with what the call extracted.
         </EmptyState>
       ) : (
-        <div className="overflow-x-auto">
+        // `min-w-0` bounds the scroller to its column: a flex/grid child
+        // defaults to min-width:auto, so without it this box grows to the
+        // table's natural width and the page scrolls sideways.
+        <div className="w-full min-w-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Thread</TableHead>
                 <TableHead>Label</TableHead>
                 <TableHead>Company / agency</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Stage</TableHead>
-                <TableHead>Relationship</TableHead>
+                <TableHead className="hidden md:table-cell">Role</TableHead>
+                <TableHead className="hidden lg:table-cell">Stage</TableHead>
+                <TableHead className="hidden lg:table-cell">Relationship</TableHead>
                 <TableHead className="text-right">Msgs</TableHead>
                 <TableHead>Read</TableHead>
               </TableRow>
@@ -118,7 +121,7 @@ export function ClassificationsPage() {
             <TableBody>
               {data.threads.map((t) => (
                 <TableRow key={t.thread_id}>
-                  <TableCell className="max-w-[26rem]">
+                  <TableCell className="max-w-[13rem] sm:max-w-[26rem]">
                     <div className="truncate">{t.subject ?? t.thread_id}</div>
                     <div className="text-muted-foreground truncate text-[11px]">
                       {t.sender ?? ""}
@@ -127,14 +130,14 @@ export function ClassificationsPage() {
                   <TableCell className={LABEL_TONE[t.label] ?? ""}>
                     {t.label}
                   </TableCell>
-                  <TableCell className="max-w-[18rem]">
+                  <TableCell className="max-w-[10rem] sm:max-w-[18rem]">
                     <CompanyCell t={t} />
                   </TableCell>
-                  <TableCell className="max-w-[12rem] truncate">
+                  <TableCell className="hidden max-w-[12rem] truncate md:table-cell">
                     {t.role_title ?? ""}
                   </TableCell>
-                  <TableCell>{t.stage ?? ""}</TableCell>
-                  <TableCell>{t.relationship ?? ""}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{t.stage ?? ""}</TableCell>
+                  <TableCell className="hidden lg:table-cell">{t.relationship ?? ""}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {t.messages_covered}
                   </TableCell>

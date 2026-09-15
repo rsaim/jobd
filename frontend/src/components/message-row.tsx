@@ -201,7 +201,14 @@ export function MessageRow({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         className={cn(
-          "hover:bg-muted/60 grid w-full grid-cols-[auto_84px_46px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-1.5 text-left text-[13px] transition-colors",
+          // Phone: two rows — the subject owns the full width on its own line,
+          // with the date and direction demoted to a meta line above it. The
+          // desktop single-row grid can't survive 375px: its fixed 84px date
+          // and 46px direction columns plus the gaps leave the subject's
+          // minmax(0,1fr) about 4px to live in, which truncates every subject
+          // to an ellipsis and makes the list unreadable.
+          "hover:bg-muted/60 grid w-full grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1 px-3 py-2 text-left text-[13px] transition-colors",
+          "sm:grid-cols-[auto_84px_46px_minmax(0,1fr)_auto] sm:gap-3 sm:px-4 sm:py-1.5",
           // An open row is a heading for the body under it, so it gets the
           // signal bar on its edge — the same mark the active nav item uses,
           // meaning the same thing: this is where you are.
@@ -214,6 +221,10 @@ export function MessageRow({
             open && "rotate-90",
           )}
         />
+        {/* Phone: date and direction share one meta line (the grid's second
+            column), so the subject below them gets the full row. Desktop
+            keeps them as their own fixed columns. */}
+        <span className="col-start-2 flex items-center gap-2 sm:col-auto sm:contents">
         <span className="tabular text-muted-foreground text-xs">
           {fmtIso(message.sent_at)}
         </span>
@@ -236,7 +247,11 @@ export function MessageRow({
           )}
           {message.direction === "inbound" ? "in" : "out"}
         </span>
-        <span className="flex min-w-0 items-center gap-2">
+        </span>
+        {/* Badges wrap under the subject on a phone rather than competing with
+            it for the same line — they are shrink-0, so on one line they win
+            and the subject loses. */}
+        <span className="col-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:col-auto sm:flex-nowrap">
           {/* Which pipe this arrived on — drawn only when it is not email.
               Today every row in this record is email, and an identical glyph
               on 58,331 rows is decoration, not information. The mark appears
@@ -252,7 +267,12 @@ export function MessageRow({
                 />
               )
             })()}
-          <span className="truncate">{message.subject || "(no subject)"}</span>
+          {/* flex-1 + min-w-0 is what keeps the subject: the badges beside it
+              are shrink-0, so without an explicit basis the subject is the
+              only thing that can give and collapses to a bare ellipsis. */}
+          <span className="w-full min-w-0 flex-1 truncate sm:w-auto">
+            {message.subject || "(no subject)"}
+          </span>
           {/* What the pipeline read off this row, not merely that it read
               something. A bare "evidence" tag says a claim was made here and
               makes you open the message to find out which; naming the stage

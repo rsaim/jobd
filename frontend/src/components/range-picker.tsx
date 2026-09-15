@@ -24,9 +24,17 @@ export function RangePicker() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2 font-mono text-[11px]">
-          <Calendar className="size-3.5" />
-          {rangeLabel(range)}
+        {/* The label is as long as the range is named ("Interview days"),
+            and this sits in a fixed-height header row that cannot wrap — so
+            it is capped and truncates rather than pushing the header off the
+            side of a phone. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="max-w-[9.5rem] gap-2 font-mono text-[11px] sm:max-w-none"
+        >
+          <Calendar className="size-3.5 shrink-0" />
+          <span className="truncate">{rangeLabel(range)}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">

@@ -218,9 +218,9 @@ export function RunsPage() {
                 <TableHead>Job</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Items</TableHead>
-                <TableHead className="text-right">Took</TableHead>
-                <TableHead className="text-right">Rate/min</TableHead>
-                <TableHead className="text-right">Calls</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Took</TableHead>
+                <TableHead className="hidden text-right lg:table-cell">Rate/min</TableHead>
+                <TableHead className="hidden text-right lg:table-cell">Calls</TableHead>
                 <TableHead className="text-right">Spend</TableHead>
                 <TableHead className="text-right">Errors</TableHead>
               </TableRow>
@@ -248,13 +248,13 @@ export function RunsPage() {
                   <TableCell className="text-right tabular-nums">
                     {run.processed.toLocaleString()}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">
                     {fmtDuration(run.elapsed_s)}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums lg:table-cell">
                     {run.rate_per_min.toLocaleString()}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums lg:table-cell">
                     {run.llm_calls.toLocaleString()}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">

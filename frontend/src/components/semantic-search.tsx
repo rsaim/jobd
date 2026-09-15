@@ -337,10 +337,13 @@ export function SemanticSearch() {
 
   return (
     <div className="mt-4 space-y-4">
-      <Card className="panel bg-card/85 sticky top-14 z-[5] rounded-xl py-3.5 backdrop-blur-md">
+      <Card className="panel bg-card/85 z-[5] rounded-xl py-3.5 backdrop-blur-md sm:sticky sm:top-14">
         <CardContent className="space-y-3 px-4">
           <div className="flex flex-wrap items-center gap-2">
-            <InputGroup className="h-9 min-w-72 flex-1">
+            {/* min-w-72 is 288px, which with the border and the inline-end
+                addon overruns a 320px phone. The floor only matters once
+                there is room for it. */}
+            <InputGroup className="h-9 w-full flex-1 sm:min-w-72">
               <InputGroupAddon>
                 <Sparkles className="size-3.5" />
               </InputGroupAddon>
@@ -406,7 +409,9 @@ export function SemanticSearch() {
                 onClick={() => runNow(probe.query)}
                 title={probe.query}
                 className={cn(
-                  "hover:border-primary/40 hover:text-foreground text-muted-foreground rounded-md border px-2 py-0.5 text-[11.5px] transition-colors",
+                  // py-0.5 makes these 23px tall — under a thumb. They get a
+                  // real target on touch and stay compact on a pointer.
+                  "hover:border-primary/40 hover:text-foreground text-muted-foreground min-h-8 rounded-md border px-2.5 py-1.5 text-[11.5px] transition-colors sm:min-h-0 sm:px-2 sm:py-0.5",
                   settled === probe.query &&
                     "border-primary/50 bg-primary/[0.07] text-foreground",
                 )}

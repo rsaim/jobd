@@ -31,7 +31,12 @@ import {
 } from "@/components/ui/table"
 import { CompanyMark } from "@/components/company-mark"
 import { Marked } from "@/components/highlight"
-import { KindBadge, SilenceRail, StageBadge } from "@/components/record-marks"
+import {
+  KindBadge,
+  SilenceRail,
+  StageBadge,
+  silenceTone,
+} from "@/components/record-marks"
 
 type SortKey = "company" | "stage" | "silence" | "touch"
 
@@ -136,14 +141,20 @@ export function BriefingTable({
             <TableHead className="text-muted-foreground h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
               Last message
             </TableHead>
-            <SortHead label="Stage" col="stage" sort={sort} onSort={onSort} className="w-40" />
-            <SortHead label="Silence" col="silence" sort={sort} onSort={onSort} className="w-36" />
+            <SortHead label="Stage" col="stage" sort={sort} onSort={onSort} className="sm:w-40" />
+            <SortHead
+              label="Silence"
+              col="silence"
+              sort={sort}
+              onSort={onSort}
+              className="hidden w-36 md:table-cell"
+            />
             <SortHead
               label="Last touch"
               col="touch"
               sort={sort}
               onSort={onSort}
-              className="w-24 [&>button]:float-right"
+              className="hidden w-24 sm:table-cell [&>button]:float-right"
             />
           </TableRow>
         </TableHeader>
@@ -166,6 +177,19 @@ export function BriefingTable({
                     <Marked text={row.canonical_name} words={words} />
                   </Link>
                   {row.kind === "agency" && <KindBadge kind="agency" />}
+                </span>
+                {/* The Silence and Last-touch columns are hidden below md, so
+                    their readings move here rather than being lost — going
+                    cold is the whole point of this table. */}
+                <span className="text-muted-foreground mt-0.5 flex items-center gap-2 font-mono text-[10.5px] md:hidden">
+                  <span className="tabular">{fmtIso(row.last_message_at)}</span>
+                  <span aria-hidden>·</span>
+                  <span
+                    className="tabular"
+                    style={{ color: silenceTone(row.days_silent).color }}
+                  >
+                    {row.days_silent}d silent
+                  </span>
                 </span>
               </TableCell>
 
@@ -198,11 +222,11 @@ export function BriefingTable({
                 <StageBadge stage={row.status} />
               </TableCell>
 
-              <TableCell className="py-1.5">
+              <TableCell className="hidden py-1.5 md:table-cell">
                 <SilenceRail days={row.days_silent} />
               </TableCell>
 
-              <TableCell className="tabular text-muted-foreground py-1.5 text-right text-[11.5px]">
+              <TableCell className="tabular text-muted-foreground hidden py-1.5 text-right text-[11.5px] sm:table-cell">
                 {fmtIso(row.last_message_at)}
               </TableCell>
             </TableRow>

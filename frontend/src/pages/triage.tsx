@@ -110,7 +110,7 @@ export function TriagePage() {
       >
         {/* Four labelled tabs are wider than a phone; the strip scrolls
             rather than the page. */}
-        <TabsList className="max-w-full overflow-x-auto">
+        <TabsList className="h-auto max-w-full overflow-x-auto [&>button]:min-h-9 sm:[&>button]:min-h-0">
           {TABS.map((entry) => (
             <TabsTrigger key={entry.value} value={entry.value} className="gap-2">
               <entry.icon className="size-3.5" />

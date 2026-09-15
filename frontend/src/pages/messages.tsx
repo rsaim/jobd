@@ -101,7 +101,7 @@ export function MessagesPage() {
         }
         className="mt-5"
       >
-        <TabsList className="max-w-full overflow-x-auto">
+        <TabsList className="h-auto max-w-full overflow-x-auto [&>button]:min-h-9 sm:[&>button]:min-h-0">
           <TabsTrigger value="text" className="gap-2">
             <Search className="size-3.5" />
             Text
@@ -117,9 +117,12 @@ export function MessagesPage() {
         <SemanticSearch />
       ) : (
       <>
-      <Card className="panel bg-card/85 sticky top-14 z-[5] mt-4 rounded-xl py-3 backdrop-blur-md">
+      {/* Not sticky on a phone: stacked, these controls are ~240px tall, so
+          pinning them would park a third of the viewport above the list for
+          the whole scroll. On desktop they are one row and worth pinning. */}
+      <Card className="panel bg-card/85 z-[5] mt-4 rounded-xl py-3 backdrop-blur-md sm:sticky sm:top-14">
         <CardContent className="flex flex-wrap items-center gap-2 px-3">
-          <InputGroup className="h-9 min-w-64 flex-1">
+          <InputGroup className="h-9 w-full flex-1 sm:min-w-64">
             <InputGroupAddon>
               <Search className="size-3.5" />
             </InputGroupAddon>
@@ -134,7 +137,7 @@ export function MessagesPage() {
             value={params.get("recorded") || ANY}
             onValueChange={(v) => set("recorded", v)}
           >
-            <SelectTrigger className="w-44" aria-label="Recorded">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-44" aria-label="Recorded">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -144,7 +147,7 @@ export function MessagesPage() {
             </SelectContent>
           </Select>
           <Select value={params.get("tag") || ANY} onValueChange={(v) => set("tag", v)}>
-            <SelectTrigger className="w-40" aria-label="Classifier">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-40" aria-label="Classifier">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -158,7 +161,7 @@ export function MessagesPage() {
             value={params.get("direction") || ANY}
             onValueChange={(v) => set("direction", v)}
           >
-            <SelectTrigger className="w-40" aria-label="Direction">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-40" aria-label="Direction">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -171,7 +174,7 @@ export function MessagesPage() {
             value={params.get("order") ?? "desc"}
             onValueChange={(v) => set("order", v)}
           >
-            <SelectTrigger className="w-40" aria-label="Order">
+            <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-40" aria-label="Order">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -179,9 +182,10 @@ export function MessagesPage() {
               <SelectItem value="asc">Oldest first</SelectItem>
             </SelectContent>
           </Select>
-          <div className="flex items-center gap-2">
+          <div className="flex min-h-9 items-center gap-2 sm:min-h-0">
             <Checkbox
               id="show-negative"
+              className="size-5 sm:size-4"
               checked={params.get("show_negative") === "1"}
               onCheckedChange={(checked) => set("show_negative", checked ? "1" : "")}
             />

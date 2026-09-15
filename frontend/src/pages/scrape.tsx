@@ -118,7 +118,7 @@ function DailyLoopCard({ days }: { days: number | null }) {
           each morning
         </span>
         <label
-          className="flex cursor-pointer items-center gap-1.5 text-[13px]"
+          className="flex min-h-9 cursor-pointer items-center gap-2 text-[13px] sm:min-h-0"
           title="Also audit the record afterwards: merge split applications, fix links. Costs about $1."
         >
           <input
@@ -126,7 +126,9 @@ function DailyLoopCard({ days }: { days: number | null }) {
             checked={withAudit}
             onChange={() => setWithAudit(!withAudit)}
             disabled={running}
-            className="accent-primary"
+            // A bare checkbox renders ~13px, which is under a thumb. The
+            // label is already the hit area; this makes the box itself one.
+            className="accent-primary size-4"
           />
           also audit (~$1)
         </label>
