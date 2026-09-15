@@ -19,8 +19,8 @@ service, no hardcoded sender lists.
 
 <p align="center">
   <a href="#what-a-job-search-actually-cost-you">What it cost you</a> ·
+  <a href="#try-it--no-credentials">Try it</a> ·
   <a href="#what-you-get">What you get</a> ·
-  <a href="#quickstart--no-credentials">Quickstart</a> ·
   <a href="#the-problem-measured">The numbers</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#what-leaves-your-machine">Privacy</a> ·
@@ -30,13 +30,12 @@ service, no hardcoded sender lists.
 ---
 
 **Finds 97% of the job-related mail in a Gmail account by fetching 20% of
-it. 100% at 29%.** A self-improving agent: it learns which senders to ask
-about next, and every confident verdict distills into a standing rule, so
-tomorrow's pass asks an LLM about mail today's already settled — cheaper
-each run, and more accurate, because a learned sender is one the cheap
-tiers can no longer wrongly drop. Spreadsheet trackers ask you to type the
-record in by hand; inbox-sync tools download the mailbox wholesale. jobd
-does neither.
+it. 100% at 29%.** A self-improving agent: every confident verdict distills
+into a standing rule, so tomorrow's pass asks an LLM about mail today's
+already settled — cheaper each run, and more accurate, because a learned
+sender is one the cheap tiers can no longer wrongly drop. Spreadsheet
+trackers ask you to type the record in by hand; inbox-sync tools download
+the mailbox wholesale. jobd does neither.
 
 ![The Today dashboard on the demo corpus: a company funnel, an interview-day
 heatmap, estimated prep and in-room hours, and median weeks to an offer —
@@ -50,12 +49,19 @@ from first contact to an offer, a 26% ghost rate — and the two numbers no
 spreadsheet has ever held.
 
 **~126h in rooms. ~437h prepping** — the invisible half of a job search:
-the practice before a technical round, the system-design and fundamentals
-sweep before an onsite, the standing weekly grind in any month the search
-was live. 437 hours that never appeared on anyone's calendar.
+the practice before a technical round, the system-design sweep before an
+onsite, the standing weekly grind in any month the search was live. 437
+hours that never appeared on anyone's calendar.
 
-Every figure is derived, never typed in, and every one is auditable — so
-here is exactly how each is computed:
+Every count is derived from the mail, never typed in. The hour figures are
+**estimates anchored on corroborated rounds, not measurements** — a mailbox
+records that an onsite was scheduled, never that you spent eight hours
+preparing for it. The weights live in one place
+([`services/dashboard.py`](src/jobd/services/dashboard.py)); change them if
+yours differ and every figure follows.
+
+<details>
+<summary><b>How each figure is computed</b> (every one is auditable)</summary>
 
 | Metric | How it is computed | Derived or assumed |
 | --- | --- | --- |
@@ -67,54 +73,21 @@ here is exactly how each is computed:
 | **Funnel** | Companies → engaged (you wrote) → replied → interviewed (≥1 confirmed round) → offers. Counts distinct companies; rounds are counted separately. | Derived |
 | **Response rate** | Applications that got a reply ÷ applications you reached out to. | Derived |
 
-The hour figures are **estimates anchored on corroborated rounds, not
-measurements**: a mailbox records that an onsite was scheduled, never that
-you spent eight hours preparing for it. The weights live in one place
-([`services/dashboard.py`](src/jobd/services/dashboard.py) —
-`_INTERVIEW_HOURS`, `_PREP_HOURS`, `_PREP_BASELINE_MONTHLY`); change them
-if yours differ and every figure follows. Each dashboard tile carries the
-same disclosure in its hint text.
+The weights are `_INTERVIEW_HOURS`, `_PREP_HOURS`, `_PREP_BASELINE_MONTHLY`
+in [`services/dashboard.py`](src/jobd/services/dashboard.py). Each dashboard
+tile carries the same disclosure in its hint text.
 
-## What you get
+</details>
 
-* **One command a day.** `jobd scrape` backfills once, then runs as a
-  three-day-window cron. Idempotent by construction: overlap costs one cheap
-  listing pass, never a re-download.
-* **A live dashboard** — watch a run as it happens (the pipeline drawn as a
-  transit rail, per-query yields, a feed of discoveries), then browse the
-  record it built: companies, applications, offers, rejections, a review
-  queue, search.
-* **Learned-first classification** — protocol signals and learned sender
-  rules decide most mail for free; thread carry resolves repeat senders; a
-  model reads only the undecided residue.
-* **A loop that provably gets cheaper** — every confident verdict distills
-  into a standing rule, and `evals/run.py --learning` asserts a second pass
-  costs fewer model calls at no accuracy loss.
-* **A reply composer on every company page** — pre-addressed from the
-  thread, a tone picker fed by your saved prompts, a drafted body you edit.
-  Sending only ever happens on your click.
-* **Any model** — any LiteLLM id via OpenRouter, or local Ollama, in which
-  case no mail leaves your machine at all. An optional chat dock answers
-  questions over the record.
+## Try it — no credentials
 
-## Reply without leaving the record
+The demo is **hosted**: [jobd.demo.rsaim.dev](https://jobd.demo.rsaim.dev),
+log in as `demo` / `demo`. Nothing to install, nothing to sign up for.
 
-Every company page ends in a composer: pre-addressed from the thread, a
-tone picker fed by your saved prompts, a drafted body you edit. Drafts are
-model-written under house style rules that keep them plain; **sending only
-ever happens on your click**.
-
-![A company page on the demo corpus: the reconstructed summary and
-timeline, and below them the reply composer with a generated
-draft](docs/img/reply-demo.png)
-
-## Quickstart — no credentials
-
-No local setup at all:
+Or run it yourself —
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rsaim/jobd)
 — the stack builds itself, the demo loads, the dashboard opens on port 8100.
-
-Or locally:
+Locally:
 
 ```bash
 docker compose up -d --build
@@ -123,19 +96,35 @@ docker compose exec app jobd demo
 # open http://localhost:8100
 ```
 
-The demo needs no key: its corpus is synthetic, so classification replays
-the gold labels through the real pipeline — prefilter, thread carry, the
-learning loop teaching rules — deterministically and offline. A model (and
-`OPENROUTER_API_KEY` + `JOBD_RUN_BUDGET`) enters the picture for live
-classify runs against real mail, the chat dock, and summaries.
+The demo needs no key: its corpus is synthetic — a job search across the
+Forbes AI 50 (2026), invented mail against real employer names — replayed
+through the real pipeline, deterministically and offline. A model (and
+`OPENROUTER_API_KEY`) enters the picture only for live runs against real
+mail. For your own Gmail, model choices, and the daily cron:
+**[docs/tour.md](docs/tour.md)**.
 
 ![The demo: open a company you never told it about, and the hiring process
 is already reconstructed — timeline, stages, summary](docs/img/demo.gif)
 
-The demo is a synthetic job search across the Forbes AI 50 (2026) — real
-employers, invented mail — through the real pipeline. For your own Gmail,
-model choices, and the daily cron: **[docs/tour.md](docs/tour.md)** and
-[AGENTS.md](AGENTS.md).
+## What you get
+
+* **One command a day.** `jobd scrape` backfills once, then runs as a
+  three-day-window cron. Idempotent by construction: overlap costs one
+  cheap listing pass, never a re-download.
+* **A live dashboard** — watch a run as it happens (the pipeline drawn as a
+  transit rail, per-query yields, a feed of discoveries), then browse the
+  record it built: companies, offers, rejections, a review queue, search.
+* **Learned-first classification** — protocol signals and learned sender
+  rules decide most mail for free; a model reads only the undecided residue.
+* **A reply composer on every company page** — pre-addressed from the
+  thread, a tone picker fed by your saved prompts, a drafted body you edit.
+  **Sending only ever happens on your click.**
+* **Any model** — any LiteLLM id via OpenRouter, or local Ollama, in which
+  case no mail leaves your machine at all.
+
+![A company page on the demo corpus: the reconstructed summary and
+timeline, and below them the reply composer with a generated
+draft](docs/img/reply-demo.png)
 
 ## The problem, measured
 
@@ -178,6 +167,14 @@ calls falling with every pass" src="docs/img/seed-expand-loop.png">
 empty. The dashed spokes are the part that compounds: model verdicts distill
 into standing rules, so the next pass asks the model less.*
 
+Here is the loop live — a one-day sync against a real mailbox. 248 queries
+in 24 seconds, and every message they surface is already in the record, so
+nothing is re-fetched and no model is paid: idempotency on camera.
+
+![A one-day sync, recorded live: the station rail lights up plan through
+report, 248 Gmail queries run, all 77 matched ids are recognized as already
+ingested, and the run closes having spent $0.00](docs/img/sync-demo.gif)
+
 No hardcoded rules anywhere. A first confident extraction teaches a sender
 domain `undecided`; a second one *resolving to the same company* promotes
 it to a zero-cost carry path — so an agency fielding five clients never
@@ -185,6 +182,10 @@ fuses five hiring processes into one timeline. Negatives silence a sender
 immediately. The loop is a testable claim, so it has a test:
 `evals/run.py --learning` asserts a second pass costs fewer model calls at
 no accuracy loss.
+
+![The learned-rules page on the demo corpus: sender rules taught by the
+pipeline, each with the verdict it carries and the extraction that taught
+it](docs/img/rules-demo.png)
 
 ## What leaves your machine
 
@@ -197,6 +198,10 @@ phone. What leaves depends only on the model you pick:
 | Cloud model | Only messages that survive the metadata prefilter, inside the extraction prompt — 41% of the reference mailbox never reached a model. |
 | `jobd demo` | Nothing real exists in this mode. |
 
+![The pipeline page on the demo corpus: how many messages the free tiers
+absorbed before any model was asked, and the rules the run
+taught](docs/img/pipeline-demo.png)
+
 The Gmail scope is `gmail.readonly` + `gmail.compose` — it can read mail and
 send *your* composed reply, never label, archive, or delete
 (`gmail.modify` is never requested). The OAuth client is yours
@@ -207,9 +212,11 @@ content-addressed on your disk or an S3 bucket you own. The full accounting
 — every credential, every write path — is in **[SECURITY.md](SECURITY.md)**;
 any discrepancy between that file and the code is a bug.
 
-(Screenshots and the GIF are the synthetic demo corpus — invented messages
-against real AI 50 employer names, as `jobd demo` discloses. The retrieval
-tables are measured on the reference mailbox, which stays private.)
+(Screenshots and GIFs are the synthetic demo corpus — invented messages
+against real AI 50 employer names, as `jobd demo` discloses — except the
+sync recording above, a real-run capture that shows only aggregate
+counters. The retrieval tables are measured on the reference mailbox,
+which stays private.)
 
 ## More
 
