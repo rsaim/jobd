@@ -1,24 +1,25 @@
 <h1 align="center">jobd</h1>
 
-<p align="center"><b>Your job search, reconstructed from your own mail.</b></p>
+<p align="center"><b>A job-search daemon. Your search, reconstructed from your own mail.</b></p>
 
 <p align="center">
-A local-first job-search CRM that builds itself from your Gmail — companies,
-applications, stage timelines, offers — every row linked to the message that
-evidences it. No mailbox download, no hosted service, no hardcoded sender
-lists.
+An agentic pipeline — a LangGraph search loop over Gmail, an LLM reading only
+what cheap deterministic tiers could not decide — that compiles a local-first
+job-search CRM: companies, applications, stage timelines, offers, every row
+linked to the message that evidences it. No mailbox download, no hosted
+service, no hardcoded sender lists.
 </p>
 
 <p align="center">
-  <a href="https://jobd.demo.rsaim.dev"><img src="https://img.shields.io/badge/live%20demo-demo%20%2F%20demo-1a56db" alt="Live demo, log in as demo/demo"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3da639" alt="MIT license"></a>
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%2B-3776ab" alt="Python 3.12+"></a>
-  <a href="https://codespaces.new/rsaim/jobd"><img src="https://img.shields.io/badge/demo-no%20credentials-181717?logo=github" alt="Demo runs with no credentials"></a>
+  <a href="https://jobd.demo.rsaim.dev"><img src="https://img.shields.io/badge/live_demo-demo_/_demo-1a56db?logo=icloud&logoColor=white" alt="Live demo, log in as demo/demo"></a>
+  <a href="https://codespaces.new/rsaim/jobd"><img src="https://img.shields.io/badge/Codespaces-no_credentials-181717?logo=github&logoColor=white" alt="Run it in Codespaces with no credentials"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white" alt="Python 3.12+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3da639?logo=opensourceinitiative&logoColor=white" alt="MIT license"></a>
 </p>
 
 <p align="center">
-  <a href="#quickstart--no-credentials">Quickstart</a> ·
   <a href="#what-you-get">What you get</a> ·
+  <a href="#quickstart--no-credentials">Quickstart</a> ·
   <a href="#the-problem-measured">The numbers</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#what-leaves-your-machine">Privacy</a> ·
@@ -28,10 +29,11 @@ lists.
 ---
 
 **Finds 97% of the job-related mail in a Gmail account by fetching 20% of
-it. 100% at 29%.** A search loop that learns which senders to ask about
-next, and gets cheaper every run. Spreadsheet trackers ask you to type the
-record in by hand; inbox-sync tools download the mailbox wholesale. jobd
-does neither.
+it. 100% at 29%.** An agent that learns which senders to ask about next,
+and pays the model less every run: every confident verdict distills into a
+standing rule, so tomorrow's pass asks an LLM about mail today's already
+settled. Spreadsheet trackers ask you to type the record in by hand;
+inbox-sync tools download the mailbox wholesale. jobd does neither.
 
 ![The Today dashboard on the demo corpus: a company funnel, an interview-day
 heatmap, estimated prep and in-room hours, and median weeks to an offer —
@@ -58,6 +60,17 @@ every figure derived from the mail itself](docs/img/today-demo.png)
 * **Any model** — any LiteLLM id via OpenRouter, or local Ollama, in which
   case no mail leaves your machine at all. An optional chat dock answers
   questions over the record.
+
+## Reply without leaving the record
+
+Every company page ends in a composer: pre-addressed from the thread, a
+tone picker fed by your saved prompts, a drafted body you edit. Drafts are
+model-written under house style rules that keep them plain; **sending only
+ever happens on your click**.
+
+![A company page on the demo corpus: the reconstructed summary and
+timeline, and below them the reply composer with a generated
+draft](docs/img/reply-demo.png)
 
 ## Quickstart — no credentials
 
@@ -156,17 +169,6 @@ Tokens live in the OS keyring; raw mail is stored write-once and
 content-addressed on your disk or an S3 bucket you own. The full accounting
 — every credential, every write path — is in **[SECURITY.md](SECURITY.md)**;
 any discrepancy between that file and the code is a bug.
-
-## Reply without leaving the record
-
-Every company page ends in a composer: pre-addressed from the thread, a
-tone picker fed by your saved prompts, a drafted body you edit. Drafts are
-model-written under house style rules that keep them plain; **sending only
-ever happens on your click**.
-
-![A company page on the demo corpus: the reconstructed summary and
-timeline, and below them the reply composer with a generated
-draft](docs/img/reply-demo.png)
 
 (Screenshots and the GIF are the synthetic demo corpus — invented messages
 against real AI 50 employer names, as `jobd demo` discloses. The retrieval
