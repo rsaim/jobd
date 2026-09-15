@@ -35,6 +35,11 @@
 	}
 
 	handle {
+		# Never cacheable: the same URL serves the app once the gate
+		# cookie exists, and file_server's Last-Modified otherwise lets
+		# the browser heuristically cache the landing page — which then
+		# shadows the app right after login.
+		header Cache-Control "no-store"
 		root * /srv/landing
 		try_files {path} /index.html
 		file_server
