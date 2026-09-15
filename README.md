@@ -10,7 +10,7 @@ lists.
 </p>
 
 <p align="center">
-  <a href="https://132-145-188-13.sslip.io"><img src="https://img.shields.io/badge/live%20demo-demo%20%2F%20demo-1a56db" alt="Live demo, log in as demo/demo"></a>
+  <a href="https://jobd.demo.rsaim.dev"><img src="https://img.shields.io/badge/live%20demo-demo%20%2F%20demo-1a56db" alt="Live demo, log in as demo/demo"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3da639" alt="MIT license"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%2B-3776ab" alt="Python 3.12+"></a>
   <a href="https://codespaces.new/rsaim/jobd"><img src="https://img.shields.io/badge/demo-no%20credentials-181717?logo=github" alt="Demo runs with no credentials"></a>
