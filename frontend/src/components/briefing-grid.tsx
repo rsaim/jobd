@@ -41,7 +41,7 @@ function BriefCard({
           <CompanyMark id={row.company_id} name={row.canonical_name} size="md" />
           <Link
             to={`/company/${row.company_id}`}
-            className="truncate font-medium after:absolute after:inset-0 hover:underline"
+            className="truncate font-medium after:absolute after:inset-0 hover:underline max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"
           >
             <Marked text={row.canonical_name} words={mark ?? []} />
           </Link>

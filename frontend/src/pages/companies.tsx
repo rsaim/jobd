@@ -231,7 +231,7 @@ export function CompaniesPage() {
                         <span className="flex min-w-0 items-center gap-2">
                           <Link
                             to={`/company/${row.id}`}
-                            className="group-hover:text-primary truncate hover:underline"
+                            className="group-hover:text-primary truncate hover:underline max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"
                           >
                             {row.canonical_name}
                           </Link>

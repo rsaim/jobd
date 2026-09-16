@@ -30,6 +30,10 @@ test.describe("truncation", () => {
         for (const el of Array.from(document.querySelectorAll("body *"))) {
           if (el.children.length > 0) continue
           const style = getComputedStyle(el)
+          // The chat dock keeps its minimized window mounted with
+          // visibility:hidden — those elements still have geometry, but a
+          // reader can't be failed by text nobody can see.
+          if (style.visibility !== "visible") continue
           if (style.textOverflow !== "ellipsis") continue
           const text = (el.textContent ?? "").trim()
           if (text.length < 8) continue
@@ -62,6 +66,50 @@ test.describe("truncation", () => {
   }
 })
 
+test.describe("company names", () => {
+  test.skip(
+    ({ viewport }) => !viewport || viewport.width > 500,
+    "phone widths only — with desktop room, an ellipsis on a rare huge name is fine",
+  )
+
+  // On a phone the company name IS the row's identity — a briefing row
+  // reading "Amazon W…" forces a tap just to learn who went quiet. Names
+  // wrap to another line instead of truncating. Every company name in the
+  // app renders as a link to its page, which is what makes this checkable
+  // wholesale rather than per-table.
+  for (const route of ROUTES) {
+    test(`company names render in full — ${route.path}`, async ({ page }) => {
+      await visit(page, resolve(route.path, company))
+      const clipped = await page.evaluate(() => {
+        const out: { text: string; shown: number; width: number }[] = []
+        for (const el of Array.from(
+          document.querySelectorAll<HTMLElement>("a[href^='/company/']"),
+        )) {
+          const box = el.getBoundingClientRect()
+          if (box.width === 0 || box.height === 0) continue
+          if (getComputedStyle(el).visibility !== "visible") continue
+          // Clipped horizontally = some of the name exists only as an
+          // ellipsis. A wrapped name has scrollWidth == clientWidth.
+          if (el.scrollWidth > el.clientWidth + 2) {
+            out.push({
+              text: (el.textContent ?? "").trim().slice(0, 50),
+              shown: Math.round((el.clientWidth / el.scrollWidth) * 100),
+              width: Math.round(box.width),
+            })
+          }
+        }
+        return out
+      })
+      expect(
+        clipped,
+        `company names truncated on a phone:\n${clipped
+          .map((c) => `  "${c.text}" shows ${c.shown}% in ${c.width}px`)
+          .join("\n")}`,
+      ).toEqual([])
+    })
+  }
+})
+
 test.describe("touch targets", () => {
   test.skip(
     ({ viewport }) => !viewport || viewport.width > 500,
@@ -81,6 +129,10 @@ test.describe("touch targets", () => {
         for (const el of Array.from(document.querySelectorAll(sel))) {
           const box = el.getBoundingClientRect()
           if (box.width === 0 || box.height === 0) continue
+          // Same rule as the truncation pass: the minimized chat window is
+          // mounted with visibility:hidden, and a control no thumb can reach
+          // has no touch-target contract to break.
+          if (getComputedStyle(el).visibility !== "visible") continue
           // Controls nested in a table row or a list row are part of a dense
           // record surface, judged by the truncation rules instead.
           if (el.closest("tr, li")) continue

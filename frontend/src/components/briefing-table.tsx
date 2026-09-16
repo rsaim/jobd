@@ -138,10 +138,20 @@ export function BriefingTable({
         <TableHeader className="bg-muted/40">
           <TableRow className="hover:bg-transparent">
             <SortHead label="Company" col="company" sort={sort} onSort={onSort} />
-            <TableHead className="text-muted-foreground h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase">
+            <TableHead className="text-muted-foreground hidden h-8 py-0 font-mono text-[10px] tracking-[0.12em] uppercase sm:table-cell">
               Last message
             </TableHead>
-            <SortHead label="Stage" col="stage" sort={sort} onSort={onSort} className="sm:w-40" />
+            {/* The phone width is a 1-px suggestion, not a real size: in
+                auto table layout it floors the column at min-content (the
+                widest badge) and hands every spare pixel to the company
+                column, whose max-w-0 makes it claim nothing on its own. */}
+            <SortHead
+              label="Stage"
+              col="stage"
+              sort={sort}
+              onSort={onSort}
+              className="max-sm:w-px sm:w-40"
+            />
             <SortHead
               label="Silence"
               col="silence"
@@ -166,17 +176,30 @@ export function BriefingTable({
             >
               {/* `max-w-0` with `w-[N%]` is what makes truncation work in a
                   table: without it the longest subject sets the column width
-                  and the page scrolls sideways instead of clipping. */}
-              <TableCell className="w-[26%] max-w-0 py-1.5 font-medium">
-                <span className="flex min-w-0 items-center gap-2">
+                  and the page scrolls sideways instead of clipping. On a
+                  phone the rules flip, because the name is the row's
+                  identity: the subject COLUMN is hidden below sm with its
+                  teaser riding under the name — the same move Silence and
+                  Last touch already make below md — and with only Stage
+                  left to pay, `max-w-0` hands this cell all the leftover
+                  width (~170px on a 320px phone), where the name renders
+                  in full, wrapping when long. [overflow-wrap:anywhere],
+                  not break-words, so one unbroken freak name lowers
+                  min-content instead of inflating the column. */}
+              <TableCell className="w-[26%] max-w-0 py-1.5 font-medium max-sm:w-auto">
+                <span className="flex min-w-0 items-center gap-2 max-sm:flex-wrap">
                   <CompanyMark id={row.company_id} name={row.canonical_name} />
                   <Link
                     to={`/company/${row.company_id}`}
-                    className="group-hover:text-primary truncate hover:underline after:absolute after:inset-0"
+                    className="group-hover:text-primary truncate hover:underline after:absolute after:inset-0 max-sm:whitespace-normal max-sm:[overflow-wrap:anywhere]"
                   >
                     <Marked text={row.canonical_name} words={words} />
                   </Link>
                   {row.kind === "agency" && <KindBadge kind="agency" />}
+                </span>
+                <span className="text-muted-foreground mt-0.5 block truncate text-[11.5px] font-normal sm:hidden">
+                  {prefix}
+                  <Marked text={row.last_subject || "(no subject)"} words={words} />
                 </span>
                 {/* The Silence and Last-touch columns are hidden below md, so
                     their readings move here rather than being lost — going
@@ -193,7 +216,7 @@ export function BriefingTable({
                 </span>
               </TableCell>
 
-              <TableCell className="text-muted-foreground max-w-0 py-1.5">
+              <TableCell className="text-muted-foreground hidden max-w-0 py-1.5 sm:table-cell">
                 <span className="flex min-w-0 items-baseline gap-2">
                   <span className="truncate">
                     {prefix}
