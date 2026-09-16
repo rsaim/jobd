@@ -336,9 +336,13 @@ def build_tools(
     def propose_set_application_outcome(
         application_id: str, outcome: str
     ) -> Proposal:
+        # The schema spells reopening "reopen" because Gemini's API rejects
+        # an empty enum value; the /close endpoint still expects "".
+        if outcome == "reopen":
+            outcome = ""
         return Proposal(
             action="set_application_outcome",
-            summary=f"Set this application's outcome to {outcome or 'open'}",
+            summary=f"Set this application's outcome to {outcome or 'open (reopen)'}",
             endpoint=f"/application/{_uuid(application_id)}/close",
             fields={"outcome": outcome, "next": "/"},
         )
@@ -560,8 +564,8 @@ def build_tools(
             name="propose_set_application_outcome",
             description=(
                 "Draft closing an application with an outcome for the user to"
-                " confirm. offer/accepted/rejected/withdrawn/declined, or empty"
-                " to reopen."
+                " confirm. offer/accepted/rejected/withdrawn/declined, or"
+                " 'reopen' to reopen."
             ),
             parameters={
                 "type": "object",
@@ -570,7 +574,14 @@ def build_tools(
                     "application_id": {"type": "string"},
                     "outcome": {
                         "type": "string",
-                        "enum": ["", "offer", "accepted", "rejected", "withdrawn", "declined"],
+                        "enum": [
+                            "reopen",
+                            "offer",
+                            "accepted",
+                            "rejected",
+                            "withdrawn",
+                            "declined",
+                        ],
                     },
                 },
             },
