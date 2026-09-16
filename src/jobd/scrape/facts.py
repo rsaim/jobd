@@ -77,20 +77,31 @@ def mailbox_facts(
         """
         SELECT count(DISTINCT c.id) FILTER (WHERE c.kind = 'employer'),
                count(DISTINCT c.id) FILTER (WHERE c.kind = 'agency'),
-               (SELECT count(*) FROM application),
-               (SELECT count(*) FROM stage_event WHERE stage = 'offer'),
-               (SELECT count(*) FROM stage_event WHERE stage = 'rejected')
+               (SELECT count(*) FROM application)
         FROM company c
         """
     ).fetchone()
     if row:
-        employers, agencies, applications, offers, rejections = row
+        employers, agencies, applications = row
         facts.append(
             f"The record now holds {employers} employers, {agencies} agencies, "
             f"{applications} applications"
         )
-        if offers or rejections:
-            facts.append(f"All time: {offers} offers, {rejections} rejections")
+    # The offer/rejection headline must be the dashboard's numbers, not a
+    # raw stage_event scan: one offer evidenced by five emails is five
+    # `offer` rows (live-caught: this line said 61 offers where the funnel
+    # counted 8). `compute_stats` owns the one true definition — distinct
+    # companies for offers, per-application outcomes for rejections.
+    try:
+        from jobd.services.dashboard import compute_stats
+
+        stats = compute_stats(conn)
+        if stats.offers or stats.rejections:
+            facts.append(
+                f"All time: {stats.offers} offers, {stats.rejections} rejections"
+            )
+    except Exception:  # noqa: BLE001 — a fact is never worth failing a run
+        pass
     fetched = int(counters.get("fetched", 0))
     skipped = int(counters.get("listed_known", 0))
     if skipped:

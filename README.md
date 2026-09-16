@@ -82,13 +82,16 @@ calls falling with every pass" src="docs/img/seed-expand-loop.png">
 empty. The dashed spokes are the part that compounds: model verdicts distill
 into standing rules, so the next pass asks the model less.*
 
-Here is the loop live — a one-day sync against a real mailbox. 248 queries
-in 24 seconds, and every message they surface is already in the record, so
-nothing is re-fetched and no model is paid: idempotency on camera.
+Here is the loop live — a one-day sync against a real mailbox. 334 Gmail
+calls in 29 seconds, and every message they surface is already in the
+record, so nothing is re-fetched and no model is paid: idempotency on
+camera. The closing lines are the record's own totals — 8 offers, 41
+rejections — straight from the dashboard's counting rules.
 
 ![A one-day sync, recorded live: the station rail lights up plan through
-report, 248 Gmail queries run, all 77 matched ids are recognized as already
-ingested, and the run closes having spent $0.00](docs/img/sync-demo.gif)
+report, 334 Gmail calls run the query pack, all 102 matched ids are
+recognized as already ingested, and the run closes having spent $0.00 with
+the record's totals on screen](docs/img/sync-demo.gif)
 
 No hardcoded rules anywhere. A first confident extraction teaches a sender
 domain `undecided`; a second one *resolving to the same company* promotes
