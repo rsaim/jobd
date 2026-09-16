@@ -1,8 +1,8 @@
 """LinkedIn DMs, pushed by the companion extension, rendered as `RawMessage`.
 
 LinkedIn offers no server-side message API to third parties, so the bytes
-cannot come from a fetch the way Gmail's do. Instead the companion extension
-(extension/, adapted from sneg55/pingcrm, AGPL-3.0) reads the user's own inbox
+cannot come from a fetch the way Gmail's do. Instead a companion browser
+extension (distributed separately) reads the user's own inbox
 via the Voyager API inside their logged-in browser tab and POSTs batches to
 ``/api/linkedin/push``. This module turns one pushed message into the
 archive's canonical form.

@@ -3,7 +3,7 @@
 Each arrives with the milestone that needs it:
 
     gmail          MessageSource   M4
-    linkedin       push renderer   M6 (no pull API exists; see docs/linkedin.md)
+    linkedin       push renderer   M6 (no pull API exists)
     s3             Storage         M4 (write-through on ingest)
     litellm/ollama LLMProvider     M5
     postgres       Backup          M3

@@ -2798,7 +2798,7 @@ def pending_reviews(
     1,716 open items share one reason string, which is what makes deciding a
     whole bucket at once the realistic action rather than a shortcut.
 
-    Ordered by expected information gain (algorithm-improvements.md #2), not
+    Ordered by expected information gain, not
     arrival: a pending item whose sender domain also appears in N other
     unresolved messages is worth more than a one-off, and a domain that
     already carries an `undecided` rule is a promotion candidate (resolving it

@@ -18,7 +18,7 @@ in `prefilter.py`:
   company promotes the rule to `positive`, which unlocks classify's zero-cost
   rule-carry path. This two-step earn is what the old ATS list short-circuited
   by fiat. Promotion is additionally gated on two conditions that the two-step
-  earn alone would miss (algorithm-improvements.md #1): the two extractions
+  earn alone would miss: the two extractions
   must resolve to the *same entity* (a domain that answered to two different
   companies never promotes — it would fuse two hiring processes into one
   timeline), and a recruiting-agency domain never promotes at all (an agency
@@ -137,7 +137,7 @@ def on_confident_positive(
     `company_kind == "agency"` never promotes: an agency domain fields many
     client employers by construction, and a domain-wide positive rule would
     fuse them all into one timeline. Same split-bias contract the entity check
-    enforces (algorithm-improvements.md #1).
+    enforces.
     """
     domain = company_domain.lower()
     if not domain or is_generic_domain(domain):

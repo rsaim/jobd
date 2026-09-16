@@ -1100,7 +1100,7 @@ class MessageRepository(Repository):
     ) -> list[dict[str, Any]]:
         """The k already-resolved messages nearest a query vector (pgvector
         cosine distance, `<=>`) — the retrieval half of classify's few-shot
-        for uncertain messages (algorithm-improvements.md #4). Resolved only:
+        for uncertain messages. Resolved only:
         a message with no `company_id` was never a useful example for "what
         company is this about"."""
         literal = "[" + ",".join(repr(float(v)) for v in vector) + "]"
@@ -1211,7 +1211,7 @@ class StageEventRepository(Repository):
         """The `occurred_at` of the application's most recent terminal stage
         (`rejected`/`withdrawn`/`accepted`/`declined`), or None when the
         process is still open. `_record`'s stage-monotonicity guard
-        (algorithm-improvements.md #5) consults this before asserting a new
+        consults this before asserting a new
         non-terminal stage: a non-terminal event on or after a terminal one
         is a contradiction the timeline must not silently absorb."""
         row = self._one(
@@ -1324,7 +1324,7 @@ class ReviewQueueRepository(Repository):
         return UUID(str(row[0]))
 
     def pending(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Open items, impact-ranked (algorithm-improvements.md #2): the
+        """Open items, impact-ranked: the
         decision that clears the most residue first, rather than oldest-first.
         `fanout` is the number of other unresolved messages sharing the
         sender domain — the human's leverage on this one decision."""

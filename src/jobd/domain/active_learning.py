@@ -1,4 +1,4 @@
-"""Active learning: impact-ranked review queue (algorithm-improvements.md #2).
+"""Active learning: impact-ranked review queue.
 
 The review queue is the human's scarce attention. Every queue item has a
 hidden fan-out value — resolving a domain that appears in 40 other pending

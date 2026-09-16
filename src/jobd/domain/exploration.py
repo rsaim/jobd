@@ -1,4 +1,4 @@
-"""Exploration budget: re-examine negative rules (algorithm-improvements.md #3).
+"""Exploration budget: re-examine negative rules.
 
 Negative rules ("silently hide real mail forever") have no mechanism to ever
 be re-examined. Domains get re-purposed: a company's marketing domain becomes

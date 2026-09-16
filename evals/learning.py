@@ -53,7 +53,7 @@ class RuleState:
     companies: dict[str, str] = field(default_factory=dict)
     #: domain rule key → (company that first sighting was taught against,
     #: rule source) — the entity-consistency and machine-never-over-human
-    #: index the promotion guard consults (algorithm-improvements.md #1).
+    #: index the promotion guard consults.
     known_company: dict[str, tuple[str | None, str]] = field(default_factory=dict)
     negatives_learned: int = 0
     undecided_learned: int = 0
@@ -223,7 +223,7 @@ def _policy_scoping_checks() -> list[str]:
         failures.append(
             "a standing rule must never be overwritten by a model negative"
         )
-    # The entity-fusion guard (algorithm-improvements.md #1): promotion must
+    # The entity-fusion guard: promotion must
     # require that the two confident extractions resolved to the *same*
     # company. A domain that answered to two different companies must not
     # unlock the zero-cost carry path.

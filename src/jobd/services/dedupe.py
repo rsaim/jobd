@@ -1,4 +1,4 @@
-"""Duplicate-company detection (algorithm-improvements.md #6).
+"""Duplicate-company detection.
 
 Entity resolution deliberately biases toward *split* over merge: an over-eager
 merge fuses two hiring processes into one timeline, while a split leaves two

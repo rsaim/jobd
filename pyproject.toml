@@ -61,10 +61,6 @@ eval = ["deepeval>=3.0"]
 # Lazy-imported: a default install neither pays for it nor depends on it, and
 # the browser push paths need none of it.
 linkedin = ["linkedin-api>=2.3"]
-# Cookie extraction for the sync above (tools/linkedin_login.py). A full
-# browser, so it is its own extra — most sync users grab the cookie by hand
-# once and never install this. After it: `playwright install chromium`.
-linkedin-login = ["playwright>=1.40"]
 
 [project.scripts]
 jobd = "jobd.cli.main:main"

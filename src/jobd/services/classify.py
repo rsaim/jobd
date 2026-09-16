@@ -226,8 +226,8 @@ class ClassifyResult:
     #: call. See `_record`'s docstring for why it teaches `undecided`, not
     #: `positive`.
     rules_learned: int = 0
-    #: Negative rules demoted to `undecided` this run — exploration budget
-    #: (algorithm-improvements.md #3) routed a message a negative rule would
+    #: Negative rules demoted to `undecided` this run — the exploration budget
+    #: routed a message a negative rule would
     #: have dropped through the model, the model said positive, and the rule
     #: was wrong.
     rules_demoted: int = 0
@@ -238,12 +238,12 @@ class ClassifyResult:
     explored: int = 0
     #: Messages that looked terminal (offer/rejection/onboarding in the
     #: subject or body) and were routed straight to the escalation model
-    #: rather than the cheap extractor (algorithm-improvements.md #7).
+    #: rather than the cheap extractor.
     terminal_routed: int = 0
     #: Stage events skipped because they contradicted an already-closed
     #: application timeline (a non-terminal stage after a terminal one) —
     #: the message still resolves to the company, the claim just isn't
-    #: asserted (algorithm-improvements.md #5).
+    #: asserted.
     stage_conflicts: int = 0
     #: Messages resolved from a thread's already-stored model reading — the
     #: one-call-per-thread cache (`thread_extraction`) answering instead of
@@ -1197,7 +1197,7 @@ def _record(
         if teach.match_type == "domain" and not teach.promotion:
             # First sighting: pin the company (with the auto source the
             # promotion guard checks) so a second message from this domain
-            # can be promoted against it (algorithm-improvements.md #1).
+            # can be promoted against it.
             known_company[f"domain:{teach.value}"] = (company.id, "auto")
         out.rules_learned += 1
         if not teach.promotion:
@@ -1243,7 +1243,7 @@ def _record(
         # Evidence-linked by construction: the message being classified *is* the
         # evidence, so there is no path here that records a claim without one.
         occurred_at = extraction.occurred_at or message.sent_at
-        # Stage monotonicity (algorithm-improvements.md #5): a non-terminal
+        # Stage monotonicity: a non-terminal
         # stage event on or after a terminal one is a contradiction — the
         # process already ended, so an "onsite" arriving after a "rejected"
         # (out-of-order ingestion, a re-surfaced old thread) must not render
@@ -1737,7 +1737,7 @@ def _match_rule(
     handling needs to know *which* domain matched, not just that one did. The
     5th is the matched rule itself — the exploration path needs its
     `match_type`/`value`/`source` to demote a rule that exploration proved
-    wrong (algorithm-improvements.md #3).
+    wrong.
     """
     from email.utils import getaddresses
 
@@ -1832,8 +1832,8 @@ def _is_bulk(payload: bytes) -> bool:
 
 
 #: Subject/body phrases that mark a message as terminal — an offer, a
-#: rejection, or post-acceptance logistics. Used only for *routing*
-#: (algorithm-improvements.md #7): a terminal-looking message gets the strong
+#: rejection, or post-acceptance logistics. Used only for *routing*:
+#: a terminal-looking message gets the strong
 #: model. A false match spends a few extra tokens; it never changes a verdict,
 #: so the list biases toward recall over precision.
 _TERMINAL_TERMS = (

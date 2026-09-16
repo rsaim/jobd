@@ -4,9 +4,9 @@ The classifier is measured per-message (`jobd_classify.py`); this measures the
 layer that turns per-message predictions into a record — application windowing
 (`pick_application`) and duplicate detection (`suggest_merges`). Deterministic
 assertions, no model: the resolution rules are pure functions, so their
-correctness is a matter of known scenarios, not vibes. This is
-algorithm-improvements.md #8 — the riskiest code in the system (resolution) is
-the least measured, and this closes that gap without a database.
+correctness is a matter of known scenarios, not vibes. The riskiest code in
+the system (resolution) was the least measured, and this closes that gap
+without a database.
 
 Run:  .venv/bin/python evals/run.py --resolution
 """
