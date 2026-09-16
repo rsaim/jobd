@@ -38,9 +38,15 @@ services:
     environment:
       DATABASE_URL: postgresql://jobd:jobd@db:5432/jobd
       JOBD_LOCAL_STORE: /data/raw
-      # No OPENROUTER_API_KEY and no JOBD_CHAT_MODEL on purpose: the tests must
-      # never make a paid call, and the chat dock's "not configured" branch is
-      # itself a state worth rendering on a phone.
+      # The same default chat model the real stack uses, so the dock renders
+      # its real header (model picker, minimize) for chat-dock.spec.ts to
+      # measure — a "not configured" notice has none of that geometry to get
+      # wrong. The key is a knowingly fake value: profile.py's keyless gate
+      # would otherwise hide chat entirely, and a key OpenRouter rejects at
+      # auth means the tests can never make a paid call — any turn a test
+      # accidentally fired would 401 before costing anything.
+      JOBD_CHAT_MODEL: openrouter/google/gemini-3.7-flash
+      OPENROUTER_API_KEY: uitest-deliberately-invalid
     ports:
       - "8111:8100"
     volumes:

@@ -120,11 +120,14 @@ export function ChatDock({
       </button>
 
       {/* Expanded window — grows upward from the same corner. Kept mounted
-          while minimized (see module docstring). */}
+          while minimized (see module docstring). Width is in viewport units:
+          a percentage here resolves against the launcher-sized wrapper
+          (w-72), which once silently shrank this window to 272px and pushed
+          the header's trailing controls past the overflow-hidden edge. */}
       <div
         id="chat-dock-window"
         className={
-          "bg-sidebar border-border/80 absolute right-0 bottom-0 flex h-[min(37.5rem,calc(100svh-4.5rem))] w-[min(24rem,calc(100%-1rem))] max-sm:fixed max-sm:right-3 max-sm:left-3 max-sm:w-auto origin-bottom-right flex-col overflow-hidden rounded-t-xl border border-b-0 shadow-2xl transition-[opacity,transform] motion-reduce:transition-none " +
+          "bg-sidebar border-border/80 absolute right-0 bottom-0 flex h-[min(37.5rem,calc(100svh-4.5rem))] w-[min(24rem,calc(100vw-2rem))] max-sm:fixed max-sm:right-3 max-sm:left-3 max-sm:w-auto origin-bottom-right flex-col overflow-hidden rounded-t-xl border border-b-0 shadow-2xl transition-[opacity,transform] motion-reduce:transition-none " +
           (open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none invisible translate-y-3 scale-[0.98] opacity-0")

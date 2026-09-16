@@ -55,6 +55,7 @@ import { Thread } from "@/components/assistant-ui/thread"
 import { ToolFallback as DefaultToolFallback } from "@/components/assistant-ui/tool-fallback"
 import { createJobdChatModel, type Proposal } from "@/lib/chat-runtime"
 import { clearHistory, createCompanyHistoryAdapter, hasSavedHistory } from "@/lib/chat-history"
+import { shortModelName } from "@/lib/utils"
 import { useCompanySummary, useSendReply } from "@/lib/api"
 import type { OutboundDraft } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -309,12 +310,23 @@ export function ChatPanel({
         >
           <Sparkles className="size-3.5" />
         </span>
-        <span className="text-sm font-semibold whitespace-nowrap">Ask jobd</span>
-        <div className="ml-auto flex items-center gap-1.5">
+        {/* Icon-only on a phone, same trick as the dock's collapsed launcher:
+            at 320px the title's ~60px is the difference between the model
+            picker fitting its short name and truncating it. */}
+        <span className="hidden text-sm font-semibold whitespace-nowrap sm:inline">
+          Ask jobd
+        </span>
+        {/* min-w-0 + shrink-0s: a full model id is wider than the dock, and
+            without them the picker refused to shrink and pushed the minimize
+            button past the window's overflow-hidden edge — present in the
+            DOM, invisible in fact. The picker is the one thing here allowed
+            to give up width. */}
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
           {companyId && (
             <Button
               size="icon-sm"
               variant="ghost"
+              className="shrink-0"
               title="Clear this company's chat history and start over"
               onClick={reset}
             >
@@ -323,10 +335,18 @@ export function ChatPanel({
           )}
           {models.length > 1 ? (
             <Select value={activeModel} onValueChange={setActiveModel}>
-              <SelectTrigger size="sm" className="h-7 w-auto font-mono text-[10.5px]">
-                <SelectValue />
+              <SelectTrigger
+                size="sm"
+                title={activeModel}
+                className="h-7 w-auto min-w-0 font-mono text-[10.5px] max-sm:h-8"
+              >
+                {/* Short name in the closed trigger — the provider prefix is
+                    identical across the allowlist and only the tail tells
+                    models apart, which is exactly the part mid-string
+                    truncation would eat. Full ids stay in the open list. */}
+                <SelectValue>{shortModelName(activeModel)}</SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent align="end">
                 {models.map((m) => (
                   <SelectItem key={m} value={m} className="font-mono text-[10.5px]">
                     {m}
@@ -335,12 +355,18 @@ export function ChatPanel({
               </SelectContent>
             </Select>
           ) : (
-            <span className="text-muted-foreground font-mono text-[10.5px]">{model}</span>
+            <span
+              title={model}
+              className="text-muted-foreground min-w-0 truncate font-mono text-[10.5px]"
+            >
+              {shortModelName(model)}
+            </span>
           )}
           {onMinimize && (
             <Button
               size="icon-sm"
               variant="ghost"
+              className="shrink-0"
               title="Minimize"
               aria-label="Minimize chat"
               onClick={onMinimize}

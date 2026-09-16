@@ -23,6 +23,9 @@ What the suite asserts, on every route:
 - **navigation.spec.ts** — the rail opens, navigates, and closes; every nav
   destination is reachable; the chat dock doesn't cover the page; message
   rows expand.
+- **chat-dock.spec.ts** — inside the open dock: the window is dock-sized
+  (not launcher-sized), the model picker shows the server's default model
+  un-clipped, and the minimize button is inside the box and works.
 
 New page? Register it in `specs/routes.ts` and the whole contract applies
 to it automatically.

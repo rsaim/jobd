@@ -23,6 +23,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useChrome, useCompanySummary } from "@/lib/api"
 import { streamCompanySummary } from "@/lib/summary-stream"
 import { fmtStamp } from "@/lib/record"
+import { shortModelName } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -173,13 +174,22 @@ export function CompanySummary({
         </span>
         Summary
       </span>
-      <div className="flex items-center gap-2">
+      {/* min-w-0/max-w-full + shrink-0s: a full model id here once made this
+          row 439px wide on a 320px phone — the whole page scrolled sideways.
+          The picker shows the short name and is the one thing that shrinks;
+          max-sm:h-8 keeps each control at the 32px phone touch minimum the
+          legibility suite enforces. */}
+      <div className="flex min-w-0 max-w-full items-center gap-2">
         {models.length > 1 && (
           <Select value={model ?? chrome.chat_model ?? ""} onValueChange={setModel}>
-            <SelectTrigger size="sm" className="h-7 w-auto font-mono text-[10.5px]">
-              <SelectValue />
+            <SelectTrigger
+              size="sm"
+              title={model ?? chrome.chat_model ?? ""}
+              className="h-7 w-auto min-w-0 font-mono text-[10.5px] max-sm:h-8"
+            >
+              <SelectValue>{shortModelName(model ?? chrome.chat_model ?? "")}</SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent align="end">
               {models.map((m) => (
                 <SelectItem key={m} value={m} className="font-mono text-[10.5px]">
                   {m}
@@ -191,7 +201,7 @@ export function CompanySummary({
         <Button
           size="sm"
           variant={web ? "default" : "outline"}
-          className="h-7 gap-1.5 text-xs"
+          className="h-7 shrink-0 gap-1.5 text-xs max-sm:h-8"
           title="Let the model search the web while generating — real cost/latency per run, off by default"
           onClick={() => setWeb((v) => !v)}
         >
@@ -201,7 +211,7 @@ export function CompanySummary({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 gap-1.5 text-xs"
+          className="h-7 shrink-0 gap-1.5 text-xs max-sm:h-8"
           disabled={streaming}
           onClick={() => void run()}
         >
@@ -213,7 +223,10 @@ export function CompanySummary({
   )
 
   const body = error ? (
-    <p className="text-destructive text-[12.5px]">{error}</p>
+    // A provider error is one long unbroken string (litellm exception +
+    // JSON payload) — without anywhere-wrapping it is the widest thing on
+    // the page and hands a phone a sideways scroll.
+    <p className="text-destructive text-[12.5px] [overflow-wrap:anywhere]">{error}</p>
   ) : text ? (
     <>
       <div className="md max-w-none">
